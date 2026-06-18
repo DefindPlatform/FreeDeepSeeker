@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Circle, LoaderCircle, Maximize2, Minimize2, TerminalSquare } from 'lucide-react';
+import { Check, ChevronDown, Circle, LoaderCircle, Maximize2, Minimize2, TerminalSquare } from 'lucide-react';
 
 function statusIcon(status) {
   if (status === 'success') return <Check size={15}/>;
@@ -9,6 +9,7 @@ function statusIcon(status) {
 
 export function Timeline({ task, latestRun }) {
   const [expanded, setExpanded] = useState(false);
+  const [compact, setCompact] = useState(false);
   const outputRef = useRef(null);
   const events = latestRun?.events || [];
   const toolEvents = events.filter(event => event.type === 'tool_result');
@@ -18,11 +19,19 @@ export function Timeline({ task, latestRun }) {
   ];
   const rows = toolEvents.length ? toolEvents : fallback;
   const output = task?.lines?.map(line => line.text).join('\n') || '';
+  const lineCount = task?.lines?.length || 0;
+  const running = task?.status === 'running';
   useEffect(() => {
-    if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    if (!outputRef.current) return;
+    const node = outputRef.current;
+    const atBottom = Math.abs(node.scrollTop + node.clientHeight - node.scrollHeight) <= 8;
+    if (atBottom) {
+      node.scrollTop = node.scrollHeight;
+    }
   }, [output]);
-  return <section className="timeline-section">
-    <div className="section-title"><div><h1>Текущая задача</h1><p>{task?.prompt || latestRun?.task || 'Опишите задачу для агента'}</p></div><TerminalSquare size={18}/></div>
+  return <section className={`timeline-section${compact ? ' compact' : ''}`}>
+    <div className="section-title"><div><h1>Текущая задача</h1><p>{task?.prompt || latestRun?.task || 'Опишите задачу для агента'}</p></div><div className="section-controls"><button type="button" className="collapse-toggle" aria-label={compact ? 'Развернуть задачу' : 'Свернуть задачу'} onClick={() => setCompact(value => !value)}>{compact ? 'Развернуть' : 'Свернуть'}</button><TerminalSquare size={18}/></div></div>
+    {compact ? <div className="compact-summary"><span><strong>{rows.length}</strong> шагов</span><span><strong>{output ? lineCount : 0}</strong> строк</span>{running ? <span className="status-running">выполняется</span> : null}</div> : null}
     <div className="timeline">
       {rows.map((event, index) => {
         const running = task?.status === 'running' && index === rows.length - 1;

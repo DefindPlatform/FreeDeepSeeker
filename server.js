@@ -372,6 +372,11 @@ function isDeepSeekModelErrorEvent(event) {
     return event && event.type === 'error';
 }
 
+function isTooFrequentDeepSeekError(error) {
+    return error && typeof error.content === 'string'
+        && /too frequent|слишком част(ые|ых) сообщения|частые сообщения/i.test(error.content);
+}
+
 function rebuildFragmentText(fragments) {
     const responseText = fragments
         .filter(isAssistantOutputFragment)
@@ -1414,6 +1419,24 @@ const server = http.createServer(async (req, res) => {
             reasoningContent = sanitizeContent(reasoningContent || '');
             const elapsed = Date.now() - startTime;
             console.log(`${agentTag} Got ${fullContent.length} chars (+${reasoningContent.length} reasoning chars) in ${elapsed}ms (msg#${session.messageCount})`);
+
+            let tooFrequentAttempt = 0;
+            const MAX_TOO_FREQUENT_RETRIES = 3;
+            while ((!fullContent || fullContent.trim().length === 0) && modelError && isTooFrequentDeepSeekError(modelError) && tooFrequentAttempt < MAX_TOO_FREQUENT_RETRIES) {
+                tooFrequentAttempt++;
+                console.log(`${agentTag} DeepSeek too frequent messages error, retrying ${tooFrequentAttempt}/${MAX_TOO_FREQUENT_RETRIES}...`);
+                session.id = null;
+                session.parentMessageId = null;
+                session.createdAt = null;
+                session.messageCount = 0;
+                await new Promise(r => setTimeout(r, 2000 * tooFrequentAttempt));
+                const { resp: retryResp } = await askDeepSeekStream(fullPrompt, agentId, requestedModel);
+                const retryResult = await readDeepSeekResponse(retryResp.body);
+                fullContent = retryResult && retryResult.content ? sanitizeContent(retryResult.content) : '';
+                reasoningContent = retryResult && retryResult.reasoningContent ? sanitizeContent(retryResult.reasoningContent) : '';
+                finishReason = retryResult.finishReason;
+                modelError = retryResult.modelError;
+            }
 
             if ((!fullContent || fullContent.trim().length === 0) && modelError) {
                 res.writeHead(502, { 'Content-Type': 'application/json' });
