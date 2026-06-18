@@ -12,6 +12,7 @@
     "scripts/",
     "chrome-extension/",
     "dashboard/dist/",
+    "docs/*.md",
     "README.md",
     "SECURITY.md",
     "LICENSE",
@@ -36,7 +37,7 @@
     "studio": "node studio-server.js",
     "studio:build": "npm --prefix dashboard install && npm --prefix dashboard run build",
     "prepack": "npm run studio:build",
-    "test": "node --check server.js && node --check studio-server.js && node --check scripts/auth.js && node --check scripts/auth_import.js && node --check scripts/doctor.js && node --check scripts/deepseek_chrome_auth.js && node --check scripts/probe_deepseek_models.js && node --check client.js && node --check agent.js && node --check lib/agent-core.js && node --check lib/project-index.js && node --check scripts/live_agentic_smoke_tests.mjs && node --test tests/unit.test.js",
+    "test": "node --check server.js && node --check studio-server.js && node --check scripts/auth.js && node --check scripts/auth_import.js && node --check scripts/doctor.js && node --check scripts/deepseek_chrome_auth.js && node --check scripts/probe_deepseek_models.js && node --check scripts/check-docs.js && node --check client.js && node --check agent.js && node --check lib/agent-core.js && node --check lib/project-index.js && node --check scripts/live_agentic_smoke_tests.mjs && node scripts/check-docs.js && node --test tests/unit.test.js",
     "test:live": "node scripts/live_agentic_smoke_tests.mjs"
   },
   "keywords": [

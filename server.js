@@ -1252,12 +1252,14 @@ const server = http.createServer(async (req, res) => {
         }
         const historyCount = session.history.length;
         const historyPreview = session.history.map(e => e.user.substring(0, 40)).join(' | ');
+        const clearHistory = ['1', 'true', 'yes'].includes(String(url.searchParams.get('clear_history') || '').toLowerCase());
         session.id = null;
         session.parentMessageId = null;
         session.createdAt = null;
         session.messageCount = 0;
+        if (clearHistory) session.history = [];
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'session_reset', agent: agentId, history_preserved: historyCount, history: historyPreview }));
+        res.end(JSON.stringify({ status: 'session_reset', agent: agentId, history_preserved: clearHistory ? 0 : historyCount, history: clearHistory ? '' : historyPreview }));
         return;
     }
 

@@ -46,7 +46,13 @@ FreeDeepseekAPI требует локальный auth-файл `deepseek-auth.j
 npm run auth
 ```
 
-Скрипт `scripts/auth.js` откроет Chrome/Chromium и сохранит рабочий auth-файл.
+Откроется меню управления авторизацией. Выберите пункт `1`. Для прямого запуска Chrome без меню:
+
+```bash
+npm run auth -- --login
+```
+
+После входа скрипт сохранит локальный `deepseek-auth.json` с правами доступа `0600` на поддерживаемых системах.
 
 ### Импорт существующего auth-файла
 
@@ -94,7 +100,18 @@ npm start
 - `MAX_REQUEST_BYTES` — максимальный размер тела запроса (по умолчанию `2097152`)
 - `RATE_LIMIT_PER_MINUTE` — локальный rate limit (по умолчанию `120`)
 
+Настройки клиентов и Studio:
+
+- `DEEPSEEK_API_URL` — адрес локального proxy для CLI, coding agent и Studio
+- `DEEPSEEK_MODEL` — модель по умолчанию для `client.js`
+- `DEEPSEEK_AGENT_MODEL` — модель по умолчанию для coding agent
+- `NO_COLOR` — отключить ANSI-цвета в терминале
+
+Настройки Chrome-помощника (`DEEPSEEK_CHROME_PORT`, `DEEPSEEK_CHROME_PROFILE`, `DEEPSEEK_KEEP_CHROME_PROFILE`, `DEEPSEEK_REUSE_CHROME`, `CHROME_PATH`) приведены в [.env.example](.env.example) и [инструкции по авторизации](docs/browser-auth.md).
+
 ## API Endpoints
+
+Если задан `FREEDEEPSEEK_API_KEY`, заголовок `Authorization: Bearer <key>` требуется для **всех** маршрутов, включая health, модели, сессии и сброс.
 
 ### Health и статус
 
@@ -202,6 +219,9 @@ npm run agent -- --undo
 - `--project-map` — вывести карту файлов проекта
 - `--json` — JSON-вывод для `--project-map`
 - `--max-steps` — ограничение числа вызовов модели
+- `--new-session` — очистить сохранённый контекст проекта перед задачей
+
+По умолчанию новые задачи в одной рабочей папке продолжают предыдущий проектный диалог. История хранится локально в `.deepseek-agent/conversation.json`; в интерактивном режиме команда `/new` начинает новый диалог.
 
 ### Studio
 
@@ -212,6 +232,12 @@ npm run studio:build
 ```
 
 Studio запускает локальный UI на `127.0.0.1:9660` и строго проверяет `Host`/`Origin`.
+Кнопка **Новый диалог** очищает контекст, но не откатывает изменения файлов.
+Подробно: [Studio UI и локальный API](docs/studio.md).
+
+### Chrome-расширение
+
+Папка `chrome-extension/` содержит распаковываемое Manifest V3 расширение для экспорта текущей DeepSeek Web-сессии. Инструкция по установке, экспорту и безопасному импорту: [docs/browser-auth.md](docs/browser-auth.md).
 
 ## Модели и возможности
 
@@ -245,6 +271,8 @@ Proxy поддерживает reasoning и web search для моделей, к
 
 - `docs/api-documentation.md`
 - `docs/coding-agent.md`
+- `docs/studio.md`
+- `docs/browser-auth.md`
 
 ## Контрибьютинг
 

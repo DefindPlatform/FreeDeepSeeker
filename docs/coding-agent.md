@@ -28,6 +28,38 @@ The normal lifecycle is:
 
 Project configuration is treated as untrusted input. A repository may select `read-only` or `ask`, but a configured `full` is downgraded to `ask`; only the operator's explicit CLI flag can enable full mode. Project configuration cannot enable access to built-in protected secret paths.
 
+## Project configuration
+
+Create a starter file with `deepseek-agent --init`. Supported keys:
+
+```json
+{
+  "permissionMode": "ask",
+  "allowProtectedPaths": false,
+  "protectedPaths": ["secrets", "config/production"],
+  "allowedPrograms": ["node", "npm", "git"],
+  "maxFileBytes": 1000000,
+  "maxCommandOutputBytes": 100000,
+  "commandTimeoutMs": 30000,
+  "rollbackOnFailure": true
+}
+```
+
+Repository configuration can only narrow the built-in program allowlist. Limits are clamped to files `1 KiB–10 MiB`, command output `1 KiB–1 MiB`, and timeout `1–120 seconds`. `allowProtectedPaths` from a repository is always forced to `false`.
+
+Built-in programs include Node package managers, Python/pip/pytest, Git, Rust/Cargo, Go, .NET, Java/Javac/Maven/Gradle. Git is limited to `status`, `diff`, `log`, `show`, `rev-parse` and `ls-files`.
+
+## Model tools
+
+- `get_project_map` — paginated/searchable project index
+- `list_files` — bounded directory listing
+- `read_file` and `search_files` — inspect text inside the workspace
+- `write_file` and `replace_in_file` — atomic changes
+- `delete_path` — delete a file or directory
+- `run_command` — structured executable plus argument array
+
+All paths remain workspace-relative and protected paths are rejected for reads and mutations.
+
 ## Filesystem safety
 
 - Paths are resolved against the canonical workspace root.
@@ -50,6 +82,10 @@ This is process hardening, not a kernel sandbox. An allowed executable or projec
 Run manifests contain timestamps, tool names, targets, command metadata, result status, file snapshots, and backup locations. File contents supplied to write tools are not copied into audit events. Backups remain local under the protected state directory.
 
 `deepseek-agent --undo` restores the newest undoable run. Failed runs with file mutations are rolled back automatically by default. Set `rollbackOnFailure` to `false` only when partial results need to be inspected manually.
+
+Each workspace has a deterministic proxy session and up to 12 saved request/result exchanges in `.deepseek-agent/conversation.json`. Therefore a new CLI process or Studio task continues the same project dialogue. Use `/new` interactively, `--new-session` for a one-shot run, or **Новый диалог** in Studio to clear both local history and the proxy session.
+
+Interactive commands are `/status`, `/mode <read-only|ask|full>`, `/models`, `/model <id>`, `/new`, `/undo`, `/help` and `/exit`. Use `--project-map --json` for machine-readable project inventory.
 
 ## Known boundaries
 

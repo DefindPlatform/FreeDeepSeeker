@@ -229,6 +229,10 @@ test('coding agent parses project-map output flags', () => {
   assert.equal(args.json, true);
 });
 
+test('coding agent parses an explicit new conversation request', () => {
+  assert.equal(agentInternals.parseArgs(['--new-session']).newSession, true);
+});
+
 test('coding agent rejects missing option values and stops parsing after double dash', () => {
   assert.throws(() => agentInternals.parseArgs(['--workspace']), /требуется значение/i);
   assert.throws(() => agentInternals.parseArgs(['--max-steps']), /требуется значение/i);
@@ -310,6 +314,20 @@ test('coding agent transaction can undo file creation and modification', () => {
   assert.equal(fs.readFileSync(existing, 'utf8'), 'before');
   assert.equal(fs.existsSync(created), false);
   assert.deepEqual(result.restored.sort(), ['created.txt', 'existing.txt']);
+});
+
+test('coding agent keeps bounded conversation context per workspace', () => {
+  const first = tmpdir();
+  const second = tmpdir();
+  assert.equal(agentCore.workspaceSessionId(first), agentCore.workspaceSessionId(first));
+  assert.notEqual(agentCore.workspaceSessionId(first), agentCore.workspaceSessionId(second));
+  for (let i = 0; i < 14; i++) agentCore.saveConversationExchange(first, `request ${i}`, `result ${i}`);
+  const history = agentCore.loadConversation(first);
+  assert.equal(history.length, 12);
+  assert.equal(history[0].user, 'request 2');
+  assert.equal(history.at(-1).assistant, 'result 13');
+  agentCore.clearConversation(first);
+  assert.deepEqual(agentCore.loadConversation(first), []);
 });
 
 test('coding agent can recover mutations from a failed run', () => {

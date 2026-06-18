@@ -9,3 +9,4 @@ export const getState = () => request('/api/state');
 export const getFile = path => request(`/api/file?path=${encodeURIComponent(path)}`);
 export const startTask = payload => request('/api/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
 export const undoRun = () => request('/api/undo', { method: 'POST' });
+export const resetContext = () => request('/api/session/reset', { method: 'POST' });

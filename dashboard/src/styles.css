@@ -153,7 +153,9 @@ main { min-width: 0; display: grid; grid-template-rows: auto minmax(230px, 1fr) 
 .composer textarea { width: 100%; resize: none; border: 0; outline: 0; padding: 13px 14px 4px; background: transparent; color: var(--text); font-size: 13px; line-height: 1.45; }
 .composer-footer { display: flex; align-items: center; justify-content: space-between; padding: 0 9px 8px 14px; color: var(--muted); font-size: 9px; }
 .composer-footer > span { display: flex; align-items: center; gap: 5px; }
+.composer-actions { display: flex; align-items: center; gap: 7px; }
 .composer button { display: flex; align-items: center; gap: 7px; border-color: var(--green); color: var(--green); font-weight: 650; padding: 7px 10px; }
+.composer button.reset-context { border-color: #4a5b69; color: #aeb9c2; font-weight: 500; }
 .composer button:disabled { opacity: .35; cursor: default; }
 .composer button kbd { margin-left: 3px; border-color: #396844; color: #8dd999; }
 .insights-panel > h2 { height: 57px; display: flex; align-items: center; padding: 0 17px; }

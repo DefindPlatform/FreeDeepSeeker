@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, Box, BrainCircuit, Check, ChevronDown, Cpu, Eye, Globe2, Hand, HardDrive, Search, Shield, ShieldAlert, Sparkles } from 'lucide-react';
-import { getFile, getState, startTask, undoRun } from './api.js';
+import { getFile, getState, resetContext, startTask, undoRun } from './api.js';
 import { ProjectTree } from './components/ProjectTree.jsx';
 import { Timeline } from './components/Timeline.jsx';
 import { DiffViewer } from './components/DiffViewer.jsx';
@@ -54,13 +54,17 @@ export function App() {
   };
   const submit = () => { if (mode === 'ask') setPendingApproval(true); else executeTask(mode === 'full'); };
   const undo = async () => { try { await undoRun(); await refresh(); } catch (cause) { setError(cause.message); } };
+  const startNewDialog = async () => {
+    if (!window.confirm('Очистить сохранённый контекст этого проекта и начать новый диалог?')) return;
+    try { await resetContext(); await refresh(); } catch (cause) { setError(cause.message); }
+  };
 
   if (!state) return <div className="loading"><Bot/> <span>{error || 'Загрузка Agent Studio…'}</span></div>;
   const activeDiff = diffRun?.diffs?.[0] || null;
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><Bot size={18}/><strong>DeepSeek Agent Studio</strong></div><TopItem icon={<HardDrive/>} label="Рабочая папка" value={state.workspace}/><ModelMenu models={models.length ? models : [{id:'deepseek-chat'}]} value={model} onChange={setModel}/><PermissionMenu value={mode} onChange={setMode}/><TopItem icon={<Box className={state.api.online ? 'online-icon' : 'offline-icon'}/>} label="Подключение" value={state.api.online ? state.api.baseUrl : 'Нет соединения'}/></header>
     {error ? <div className="error-banner">{error}<button onClick={() => setError('')}>×</button></div> : null}
-    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(undoableRun)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} running={running}/></main><Insights project={state.project} latestRun={latestRun} api={state.api}/></div>
+    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(undoableRun)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} onResetContext={startNewDialog} running={running} exchanges={state.conversation?.exchanges || 0}/></main><Insights project={state.project} latestRun={latestRun} api={state.api}/></div>
     {pendingApproval ? <div className="modal-backdrop" role="presentation"><section className="approval-modal" role="dialog" aria-modal="true" aria-labelledby="approval-title"><ShieldAlert size={24}/><h2 id="approval-title">Разрешить изменения задачи?</h2><p>Agent получит режим full только для этого запуска. Все файловые изменения попадут в транзакцию и смогут быть откатаны.</p><pre>{prompt}</pre><div><button onClick={() => setPendingApproval(false)}>Отмена</button><button className="approve" onClick={() => executeTask(true)}>Подтвердить и запустить</button></div></section></div> : null}
   </div>;
 }

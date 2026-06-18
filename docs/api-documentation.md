@@ -138,7 +138,7 @@ data: {"p": "response/done"}
 - `parent_message_id` is an **integer**, NOT a string — tracks the conversation tree
 - On first call, `parent_message_id` is `null`
 - The first SSE event (metadata) contains the first characters of content; subsequent `response/content` events append more
-- On session reuse, the first 2 characters ("TO") arrive in the metadata content, the rest in content events
+- Fragment placement is controlled by the current DeepSeek Web protocol and may change; the proxy rebuilds text from metadata, content and fragment patches.
 
 ### 2.4 Proof-of-Work (SHA3 Wasm)
 
@@ -165,6 +165,8 @@ Steps:
 ## 3. Proxy Endpoints
 
 The proxy exposes OpenAI-compatible endpoints:
+
+When `FREEDEEPSEEK_API_KEY` is configured, every route below requires `Authorization: Bearer <key>`. Health is excluded from local rate limiting, but not from authentication. Other routes share the per-IP `RATE_LIMIT_PER_MINUTE` limit.
 
 ### 3.1 Health Check
 
@@ -201,6 +203,13 @@ Response:
 }
 ```
 
+The full capability map, including known but unavailable aliases, is exposed at both:
+
+```
+GET /v1/model-capabilities
+GET /api/model-capabilities
+```
+
 ### 3.3 Chat Completions — Primary API
 
 ```
@@ -216,7 +225,7 @@ Body (OpenAI-compatible):
 {
   "messages": [
     {"role": "system", "content": "..."},   ← system prompt
-    {"role": "user", "content": "..."}      ← user prompt (last one used)
+    {"role": "user", "content": "..."}      ← full non-system conversation is preserved
   ],
   "tools": [                                 ← optional, for tool calling
     {
@@ -380,6 +389,7 @@ Response:
       "agent": "dev-agent",
       "session_id": "uuid",
       "message_count": 42,
+      "account": "account_1",
       "history_size": 15,
       "age_min": 23
     }
@@ -393,6 +403,7 @@ Response:
 ```
 POST /reset-session?agent=<agent-id>
 POST /reset-session?agent=all
+POST /reset-session?agent=<agent-id>&clear_history=true
 
 Response (single):
 {
@@ -408,6 +419,9 @@ Response (all):
   "count": 3
 }
 ```
+
+When `agent` is omitted, the endpoint targets the literal session key `default`.
+By default a single-session reset preserves the proxy's short recovery history. Add `clear_history=true` for a genuinely blank conversation; CLI `/new`, coding-agent `/new`, `--new-session`, and Studio **Новый диалог** use this form.
 
 ---
 
@@ -582,13 +596,13 @@ providers: {}
 fallback_providers: []
 ```
 
-### 7.3 Environment Variables Required
+### 7.3 Environment Variables
 
-- **DeepSeek token** — from browser's `Authorization` header on chat.deepseek.com
-- **x-hif-dliq** — custom header from browser
-- **x-hif-leim** — custom header from browser  
-- **ds_session_id** — from browser cookie
-- **smidV2** — from browser cookie
+Server: `HOST`, `PORT`, `FREEDEEPSEEK_API_KEY`, `DEEPSEEK_AUTH_PATH`, `DEEPSEEK_AUTH_DIR`, `DEEPSEEK_ACCOUNT_COOLDOWN_MS`, `MAX_REQUEST_BYTES`, `RATE_LIMIT_PER_MINUTE`, `CORS_ORIGIN`, `NON_INTERACTIVE`, `SKIP_ACCOUNT_MENU`.
+
+Local clients: `DEEPSEEK_API_URL`, `DEEPSEEK_MODEL`, `DEEPSEEK_AGENT_MODEL`, `FREEDEEPSEEK_API_KEY`, `NO_COLOR`.
+
+`FREEDEEPSEEK_API_KEY` is mandatory for a non-loopback `HOST`. The auth JSON contains the browser token, cookie, optional `hif_dliq`/`hif_leim`, and PoW WASM URL. Create it with `npm run auth -- --login` or follow [browser-auth.md](browser-auth.md).
 
 ---
 
@@ -653,7 +667,7 @@ Error response format:
 |---|---|---|
 | Empty responses | DeepSeek web session instability | Proxy retries with fresh sessions, then returns 502 |
 | No native tool calling | DeepSeek Web API doesn't support it | LLM may generate malformed tool calls |
-| Response time 3-17s | PoW + network to DeepSeek | Slower than official API |
+| Variable response time | PoW + network to DeepSeek | No latency guarantee |
 | Session TTL ~2h | DeepSeek web browser timeout | Periodic session resets |
 | Credentials expire | Browser tokens/cookies change | Proxy needs re-auth |
 | Account-level limits | Sessions assigned to one login share its limits | Configure multiple auth files for account pooling |
@@ -668,8 +682,8 @@ Error response format:
 | **Model** | Current model exposed by DeepSeek Web (aliases documented by `/v1/models`) | Models offered by the official API |
 | **Tool calling** | Hacky (text injection) | Native (structured) |
 | **Streaming** | Yes | Yes |
-| **Reliability** | Medium (session drops) | High (SLA) |
-| **Speed** | 3-17s per call | 1-5s per call |
+| **Reliability** | Best effort; automatic retries | Provider-dependent |
+| **Speed** | Includes PoW and Web latency | Provider-dependent |
 | **Auth** | Cookie/token | API key |
 | **PoW** | Required every call | None |
 | **API key needed** | No | Yes |

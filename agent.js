@@ -20,7 +20,7 @@ const c = {
 function parseArgs(argv) {
   const options = {
     workspace: process.cwd(), url: DEFAULT_URL, model: DEFAULT_MODEL,
-    yes: false, mode: '', undo: false, init: false, allowHome: false, projectMap: false, json: false, maxSteps: 25, help: false, prompt: '',
+    yes: false, mode: '', undo: false, init: false, allowHome: false, projectMap: false, json: false, newSession: false, maxSteps: 25, help: false, prompt: '',
   };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
@@ -43,6 +43,7 @@ function parseArgs(argv) {
     else if (name === '--allow-home') options.allowHome = true;
     else if (name === '--project-map') options.projectMap = true;
     else if (name === '--json') options.json = true;
+    else if (name === '--new-session') options.newSession = true;
     else if (name === '--help' || name === '-h') options.help = true;
     else if (arg.startsWith('-')) throw new Error(`Неизвестный параметр: ${arg}`);
     else positional.push(arg);
@@ -78,6 +79,7 @@ ${c.bold('DeepSeek Coding Agent')}
       --allow-home       явно разрешить workspace в домашней папке
       --project-map      показать полный индекс проекта и выйти
       --json             JSON-вывод для --project-map
+      --new-session      очистить контекст проекта перед запуском
       --max-steps <n>    максимум вызовов модели (25)
       --url <url>        адрес FreeDeepseekAPI
   -h, --help             справка
@@ -125,6 +127,7 @@ function printInteractiveHelp() {
 /models                показать доступные модели
 /mode <режим>          read-only, ask или full
 /status                текущие настройки
+/new                   очистить контекст проекта и начать новый диалог
 /undo                  откатить последний запуск
 /help                  эта справка
 /exit                  выход
@@ -381,9 +384,20 @@ async function runAgent(task, options, rl) {
   const root = fs.realpathSync(options.workspace);
   const index = projectIndex.createProjectIndex(root, options.config);
   const transaction = new core.RunTransaction(root, task);
-  const session = `coding-agent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const session = options.sessionId || core.workspaceSessionId(root);
+  let remoteHasContext = false;
+  try {
+    const sessionResponse = await api.request(`${options.url}/v1/sessions`);
+    const sessionState = await sessionResponse.json();
+    remoteHasContext = sessionState.agents?.some(item => item.agent === session);
+  } catch {}
+  const previous = remoteHasContext ? [] : core.loadConversation(root);
   const messages = [
     { role: 'system', content: systemPrompt(root, options.config.permissionMode, index) },
+    ...previous.flatMap(exchange => [
+      { role: 'user', content: `[Previous project request]\n${exchange.user}` },
+      { role: 'assistant', content: exchange.assistant },
+    ]),
     { role: 'user', content: task },
   ];
 
@@ -403,6 +417,7 @@ async function runAgent(task, options, rl) {
     if (!calls.length) {
       console.log(`${c.green('DeepSeek:')}\n${message.content || '(задача завершена без комментария)'}`);
       transaction.finish('completed');
+      core.saveConversationExchange(root, task, message.content || 'Задача завершена без итогового комментария.');
       return { completed: true, content: message.content || '', runId: transaction.id };
     }
 
@@ -437,10 +452,20 @@ async function runAgent(task, options, rl) {
   }
 }
 
+async function resetAgentContext(options) {
+  core.clearConversation(options.workspace);
+  const sessionId = options.sessionId || core.workspaceSessionId(options.workspace);
+  try {
+    await api.request(`${options.url}/reset-session?agent=${encodeURIComponent(sessionId)}&clear_history=true`, { method: 'POST' });
+  } catch (error) {
+    if (!/No session for agent|HTTP 404/i.test(error.message)) throw error;
+  }
+}
+
 async function interactive(options, models) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   console.log(`${c.bold('\nDeepSeek Coding Agent')}\nПапка: ${c.cyan(options.workspace)}\nМодель: ${options.model}\nРежим: ${c.yellow(options.config.permissionMode)}\nПроект: ${options.projectIndex.fileCount} файлов · ${options.projectIndex.languages.slice(0, 4).map(item => item.name).join(', ')}\n`);
-  console.log(c.dim('Опишите задачу. Команды: /status, /mode <read-only|ask|full>, /undo, /model <id>, /exit'));
+  console.log(c.dim('Опишите задачу. Команды: /status, /mode <read-only|ask|full>, /new, /undo, /model <id>, /exit'));
   rl.on('SIGINT', () => rl.close());
   while (true) {
     let task;
@@ -454,8 +479,13 @@ async function interactive(options, models) {
       continue;
     }
     if (task === '/models') { printModelMenu(models, options.model); continue; }
+    if (task === '/new') {
+      try { await resetAgentContext(options); console.log(c.green('Контекст проекта очищен. Следующая задача начнёт новый диалог.')); }
+      catch (error) { console.log(c.red(`Контекст не очищен: ${error.message}`)); }
+      continue;
+    }
     if (task === '/status') {
-      console.log(`Папка: ${options.workspace}\nМодель: ${options.model}\nРежим: ${options.config.permissionMode}`);
+      console.log(`Папка: ${options.workspace}\nМодель: ${options.model}\nРежим: ${options.config.permissionMode}\nСессия: ${options.sessionId}\nИстория: ${core.loadConversation(options.workspace).length} диалогов`);
       continue;
     }
     if (task === '/undo') {
@@ -516,6 +546,7 @@ async function main(argv = process.argv.slice(2)) {
     return 0;
   }
   options.config = core.loadProjectConfig(options.workspace);
+  options.sessionId = core.workspaceSessionId(options.workspace);
   if (options.yes) options.config.permissionMode = 'full';
   if (options.mode) options.config.permissionMode = options.mode;
   options.projectIndex = projectIndex.createProjectIndex(options.workspace, options.config);
@@ -531,6 +562,10 @@ async function main(argv = process.argv.slice(2)) {
   }
   const models = await api.connectModels({ url: options.url, autoStart: true });
   if (!models.some(model => model.id === options.model)) throw new Error(`Модель ${options.model} недоступна`);
+  if (options.newSession) {
+    await resetAgentContext(options);
+    console.log(c.green('Контекст проекта очищен.'));
+  }
   if (!options.prompt && !process.stdin.isTTY) options.prompt = fs.readFileSync(0, 'utf8').trim();
   if (options.prompt) {
     const rl = process.stdin.isTTY ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null;
@@ -549,4 +584,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { __test: { parseArgs, isInside, isHomeWorkspace, selectModel, resolveWorkspacePath, readTextFile, walk, executeTool } };
+module.exports = { __test: { parseArgs, isInside, isHomeWorkspace, selectModel, resolveWorkspacePath, readTextFile, walk, executeTool, resetAgentContext } };

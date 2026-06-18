@@ -322,7 +322,7 @@ async function ask(baseUrl, state, prompt) {
 }
 
 async function resetSession(baseUrl, session) {
-  await request(`${baseUrl}/reset-session?agent=${encodeURIComponent(session)}`, { method: 'POST' });
+  await request(`${baseUrl}/reset-session?agent=${encodeURIComponent(session)}&clear_history=true`, { method: 'POST' });
 }
 
 function printStatus(baseUrl, state) {

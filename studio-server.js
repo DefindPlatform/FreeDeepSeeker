@@ -130,6 +130,7 @@ function createStudioServer(options) {
   const dist = path.join(__dirname, 'dashboard', 'dist');
   const apiBaseUrl = String(process.env.DEEPSEEK_API_URL || 'http://127.0.0.1:9655').replace(/\/+$/, '');
   const apiHeaders = process.env.FREEDEEPSEEK_API_KEY ? { Authorization: `Bearer ${process.env.FREEDEEPSEEK_API_KEY}` } : {};
+  const sessionId = core.workspaceSessionId(workspace);
   let task = null;
 
   const state = async () => {
@@ -143,6 +144,7 @@ function createStudioServer(options) {
       project: projectIndex.createProjectIndex(workspace, config),
       runs: loadRuns(workspace),
       task,
+      conversation: { sessionId, exchanges: core.loadConversation(workspace).length },
       api: { online: Boolean(health), baseUrl: apiBaseUrl, health, models: models?.data || [] },
     };
   };
@@ -188,6 +190,13 @@ function createStudioServer(options) {
       }
       if (req.method === 'POST' && url.pathname === '/api/tasks') return json(res, 202, startTask(await readJson(req)));
       if (req.method === 'POST' && url.pathname === '/api/undo') return json(res, 200, core.undoLatestRun(workspace));
+      if (req.method === 'POST' && url.pathname === '/api/session/reset') {
+        core.clearConversation(workspace);
+        const response = await fetch(`${apiBaseUrl}/reset-session?agent=${encodeURIComponent(sessionId)}&clear_history=true`, { method: 'POST', headers: apiHeaders }).catch(() => null);
+        if (response && !response.ok && response.status !== 404) throw new Error(`Proxy не сбросил сессию: HTTP ${response.status}`);
+        task = null;
+        return json(res, 200, { status: 'context_reset', sessionId });
+      }
       if (url.pathname.startsWith('/api/')) return json(res, 404, { error: 'Not found' });
 
       if (!fs.existsSync(dist)) return json(res, 503, { error: 'Dashboard is not built. Run npm run studio:build.' });
