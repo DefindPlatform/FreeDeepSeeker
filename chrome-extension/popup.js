@@ -18,7 +18,7 @@ function buildAuthJson(data) {
   };
 }
 
-function getStatus(auth, data) {
+function getStatus(auth) {
   const checks = [
     { label: 'token', ok: !!auth.token },
     { label: 'cookie (ds_session_id / smidV2)', ok: auth.cookie.includes('=') },
@@ -33,7 +33,7 @@ function render(data) {
   const preview = JSON.stringify(auth, null, 2);
   $('jsonPreview').textContent = preview;
 
-  const { checks, allOk } = getStatus(auth, data);
+  const { checks, allOk } = getStatus(auth);
   const missing = checks.filter((c) => !c.ok).map((c) => c.label);
 
   if (!data._lastUpdated) {

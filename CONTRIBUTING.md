@@ -9,13 +9,13 @@
 3. Установите зависимости:
 
 ```bash
-npm install
+npm ci
 ```
 
 4. Запустите локальные проверки до создания PR:
 
 ```bash
-npm test
+npm run check
 ```
 
 Если вы меняли UI, предварительно соберите студию:
@@ -33,10 +33,13 @@ npm run studio:build
 
 ## Тесты
 
-Запускайте основные проверки перед PR:
+Запускайте быстрые тесты во время разработки и полный gate перед PR:
 
 ```bash
 npm test
+npm run lint
+npm run coverage
+npm run check
 ```
 
 Для live smoke-тестов используйте:

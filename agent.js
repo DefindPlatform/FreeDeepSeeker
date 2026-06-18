@@ -20,7 +20,7 @@ const c = {
 function parseArgs(argv) {
   const options = {
     workspace: process.cwd(), url: DEFAULT_URL, model: DEFAULT_MODEL,
-    yes: false, mode: '', undo: false, init: false, allowHome: false, projectMap: false, json: false, newSession: false, maxSteps: 25, help: false, prompt: '',
+    yes: false, mode: '', undo: false, init: false, allowHome: false, projectMap: false, json: false, newSession: false, noHistory: false, maxSteps: 25, help: false, prompt: '',
   };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
@@ -44,6 +44,7 @@ function parseArgs(argv) {
     else if (name === '--project-map') options.projectMap = true;
     else if (name === '--json') options.json = true;
     else if (name === '--new-session') options.newSession = true;
+    else if (name === '--no-history') options.noHistory = true;
     else if (name === '--help' || name === '-h') options.help = true;
     else if (arg.startsWith('-')) throw new Error(`Неизвестный параметр: ${arg}`);
     else positional.push(arg);
@@ -80,6 +81,7 @@ ${c.bold('DeepSeek Coding Agent')}
       --project-map      показать полный индекс проекта и выйти
       --json             JSON-вывод для --project-map
       --new-session      очистить контекст проекта перед запуском
+      --no-history       не читать и не сохранять историю этого запуска
       --max-steps <n>    максимум вызовов модели (25)
       --url <url>        адрес FreeDeepseekAPI
   -h, --help             справка
@@ -384,6 +386,19 @@ async function runAgent(task, options, rl) {
   const root = fs.realpathSync(options.workspace);
   const index = projectIndex.createProjectIndex(root, options.config);
   const transaction = new core.RunTransaction(root, task);
+  let cancellationStarted = false;
+  const cancelRun = () => {
+    if (cancellationStarted) return;
+    cancellationStarted = true;
+    try {
+      if (options.config.rollbackOnFailure && transaction.manifest.entries.length > 0) transaction.rollback('cancelled');
+      else transaction.finish('cancelled', 'Task cancelled by operator');
+    } catch (error) {
+      transaction.finish('cancelled', `Task cancelled; rollback failed: ${error.message}`);
+    }
+    process.exit(130);
+  };
+  process.once('SIGTERM', cancelRun);
   const session = options.sessionId || core.workspaceSessionId(root);
   let remoteHasContext = false;
   try {
@@ -391,7 +406,7 @@ async function runAgent(task, options, rl) {
     const sessionState = await sessionResponse.json();
     remoteHasContext = sessionState.agents?.some(item => item.agent === session);
   } catch {}
-  const previous = remoteHasContext ? [] : core.loadConversation(root);
+  const previous = remoteHasContext ? [] : core.loadConversation(root, options.config);
   const messages = [
     { role: 'system', content: systemPrompt(root, options.config.permissionMode, index) },
     ...previous.flatMap(exchange => [
@@ -417,7 +432,7 @@ async function runAgent(task, options, rl) {
     if (!calls.length) {
       console.log(`${c.green('DeepSeek:')}\n${message.content || '(задача завершена без комментария)'}`);
       transaction.finish('completed');
-      core.saveConversationExchange(root, task, message.content || 'Задача завершена без итогового комментария.');
+      core.saveConversationExchange(root, task, message.content || 'Задача завершена без итогового комментария.', options.config);
       return { completed: true, content: message.content || '', runId: transaction.id };
     }
 
@@ -442,18 +457,24 @@ async function runAgent(task, options, rl) {
     transaction.finish('failed', error.message);
     if (options.config.rollbackOnFailure && transaction.manifest.entries.length > 0) {
       try {
-        const rollback = core.undoLatestRun(root);
+        const rollback = transaction.rollback('undone');
         console.log(c.yellow(`Изменения неуспешного запуска автоматически откатаны (${rollback.runId}).`));
       } catch (rollbackError) {
         console.log(c.red(`Автооткат не выполнен: ${rollbackError.message}`));
       }
     }
     throw error;
+  } finally {
+    process.removeListener('SIGTERM', cancelRun);
   }
 }
 
 async function resetAgentContext(options) {
   core.clearConversation(options.workspace);
+  await resetRemoteContext(options);
+}
+
+async function resetRemoteContext(options) {
   const sessionId = options.sessionId || core.workspaceSessionId(options.workspace);
   try {
     await api.request(`${options.url}/reset-session?agent=${encodeURIComponent(sessionId)}&clear_history=true`, { method: 'POST' });
@@ -485,7 +506,7 @@ async function interactive(options, models) {
       continue;
     }
     if (task === '/status') {
-      console.log(`Папка: ${options.workspace}\nМодель: ${options.model}\nРежим: ${options.config.permissionMode}\nСессия: ${options.sessionId}\nИстория: ${core.loadConversation(options.workspace).length} диалогов`);
+      console.log(`Папка: ${options.workspace}\nМодель: ${options.model}\nРежим: ${options.config.permissionMode}\nСессия: ${options.sessionId}\nИстория: ${options.config.historyEnabled ? `${core.loadConversation(options.workspace, options.config).length} диалогов` : 'отключена'}`);
       continue;
     }
     if (task === '/undo') {
@@ -540,6 +561,10 @@ async function main(argv = process.argv.slice(2)) {
       maxCommandOutputBytes: 100000,
       commandTimeoutMs: 30000,
       rollbackOnFailure: true,
+      historyEnabled: true,
+      historyTtlDays: 30,
+      maxConversationExchanges: 12,
+      maxConversationChars: 30000,
     };
     core.atomicWrite(configPath, `${JSON.stringify(template, null, 2)}\n`);
     console.log(c.green(`Создан ${configPath}`));
@@ -547,6 +572,8 @@ async function main(argv = process.argv.slice(2)) {
   }
   options.config = core.loadProjectConfig(options.workspace);
   options.sessionId = core.workspaceSessionId(options.workspace);
+  if (options.noHistory) options.config.historyEnabled = false;
+  if (!options.config.historyEnabled) options.sessionId = `${options.sessionId}-private-${process.pid}-${Date.now()}`;
   if (options.yes) options.config.permissionMode = 'full';
   if (options.mode) options.config.permissionMode = options.mode;
   options.projectIndex = projectIndex.createProjectIndex(options.workspace, options.config);
@@ -570,10 +597,14 @@ async function main(argv = process.argv.slice(2)) {
   if (options.prompt) {
     const rl = process.stdin.isTTY ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null;
     try { await runAgent(options.prompt, options, rl); }
-    finally { if (rl) rl.close(); }
+    finally {
+      if (!options.config.historyEnabled) await resetRemoteContext(options).catch(() => {});
+      if (rl) rl.close();
+    }
     return 0;
   }
-  await interactive(options, models);
+  try { await interactive(options, models); }
+  finally { if (!options.config.historyEnabled) await resetRemoteContext(options).catch(() => {}); }
   return 0;
 }
 

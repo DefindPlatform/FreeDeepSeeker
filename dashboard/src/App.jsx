@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, Box, BrainCircuit, Check, ChevronDown, Cpu, Eye, Globe2, Hand, HardDrive, Search, Shield, ShieldAlert, Sparkles } from 'lucide-react';
-import { getFile, getState, resetContext, startTask, undoRun } from './api.js';
+import { cancelTask, getFile, getState, resetContext, startTask, undoRun } from './api.js';
 import { ProjectTree } from './components/ProjectTree.jsx';
 import { Timeline } from './components/Timeline.jsx';
 import { DiffViewer } from './components/DiffViewer.jsx';
@@ -22,7 +22,14 @@ export function App() {
   const refresh = useCallback(async () => {
     try { setState(await getState()); setError(''); } catch (cause) { setError(cause.message); }
   }, []);
-  useEffect(() => { refresh(); const timer = setInterval(refresh, 1500); return () => clearInterval(timer); }, [refresh]);
+  useEffect(() => {
+    refresh();
+    const events = new EventSource('/api/events');
+    let refreshTimer;
+    events.onmessage = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 80); };
+    const fallback = setInterval(refresh, 10000);
+    return () => { clearTimeout(refreshTimer); clearInterval(fallback); events.close(); };
+  }, [refresh]);
   useEffect(() => {
     if (!state || modeInitialized.current) return;
     setMode(state.config?.permissionMode || 'ask');
@@ -47,13 +54,15 @@ export function App() {
   const undoableRun = state?.runs?.find(run => ['completed', 'failed'].includes(run.status) && run.entries?.length) || null;
   const diffRun = state?.runs?.find(run => run.diffs?.length) || null;
   const models = state?.api?.models || [];
-  const running = state?.task?.status === 'running';
+  const cancelling = state?.task?.status === 'cancelling';
+  const running = ['running', 'cancelling'].includes(state?.task?.status);
   const executeTask = async approved => {
     try { await startTask({ prompt, model, mode, approved }); setPrompt(''); setPendingApproval(false); await refresh(); }
     catch (cause) { setError(cause.message); }
   };
   const submit = () => { if (mode === 'ask') setPendingApproval(true); else executeTask(mode === 'full'); };
   const undo = async () => { try { await undoRun(); await refresh(); } catch (cause) { setError(cause.message); } };
+  const cancel = async () => { try { await cancelTask(); await refresh(); } catch (cause) { setError(cause.message); } };
   const startNewDialog = async () => {
     if (!window.confirm('Очистить сохранённый контекст этого проекта и начать новый диалог?')) return;
     try { await resetContext(); await refresh(); } catch (cause) { setError(cause.message); }
@@ -64,7 +73,7 @@ export function App() {
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><Bot size={18}/><strong>DeepSeek Agent Studio</strong></div><TopItem icon={<HardDrive/>} label="Рабочая папка" value={state.workspace}/><ModelMenu models={models.length ? models : [{id:'deepseek-chat'}]} value={model} onChange={setModel}/><PermissionMenu value={mode} onChange={setMode}/><TopItem icon={<Box className={state.api.online ? 'online-icon' : 'offline-icon'}/>} label="Подключение" value={state.api.online ? state.api.baseUrl : 'Нет соединения'}/></header>
     {error ? <div className="error-banner">{error}<button onClick={() => setError('')}>×</button></div> : null}
-    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(undoableRun)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} onResetContext={startNewDialog} running={running} exchanges={state.conversation?.exchanges || 0}/></main><Insights project={state.project} latestRun={latestRun} api={state.api}/></div>
+    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(undoableRun)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} onCancel={cancel} onResetContext={startNewDialog} running={running} cancelling={cancelling} historyEnabled={state.conversation?.enabled !== false} exchanges={state.conversation?.exchanges || 0}/></main><Insights project={state.project} latestRun={latestRun} api={state.api}/></div>
     {pendingApproval ? <div className="modal-backdrop" role="presentation"><section className="approval-modal" role="dialog" aria-modal="true" aria-labelledby="approval-title"><ShieldAlert size={24}/><h2 id="approval-title">Разрешить изменения задачи?</h2><p>Agent получит режим full только для этого запуска. Все файловые изменения попадут в транзакцию и смогут быть откатаны.</p><pre>{prompt}</pre><div><button onClick={() => setPendingApproval(false)}>Отмена</button><button className="approve" onClick={() => executeTask(true)}>Подтвердить и запустить</button></div></section></div> : null}
   </div>;
 }

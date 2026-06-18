@@ -41,7 +41,11 @@ Create a starter file with `deepseek-agent --init`. Supported keys:
   "maxFileBytes": 1000000,
   "maxCommandOutputBytes": 100000,
   "commandTimeoutMs": 30000,
-  "rollbackOnFailure": true
+  "rollbackOnFailure": true,
+  "historyEnabled": true,
+  "historyTtlDays": 30,
+  "maxConversationExchanges": 12,
+  "maxConversationChars": 30000
 }
 ```
 
@@ -83,7 +87,7 @@ Run manifests contain timestamps, tool names, targets, command metadata, result 
 
 `deepseek-agent --undo` restores the newest undoable run. Failed runs with file mutations are rolled back automatically by default. Set `rollbackOnFailure` to `false` only when partial results need to be inspected manually.
 
-Each workspace has a deterministic proxy session and up to 12 saved request/result exchanges in `.deepseek-agent/conversation.json`. Therefore a new CLI process or Studio task continues the same project dialogue. Use `/new` interactively, `--new-session` for a one-shot run, or **Новый диалог** in Studio to clear both local history and the proxy session.
+Each workspace has a deterministic proxy session and saved request/result exchanges in `.deepseek-agent/conversation.json`. Therefore a new CLI process or Studio task continues the same project dialogue. By default the local history keeps 12 exchanges, at most 30,000 serialized characters, for 30 days. The four history settings above are clamped to safe bounds. Set `historyEnabled` to `false` for a repository that must never persist conversation context, or use `--no-history` for one private invocation; private invocations use an isolated proxy session and delete that remote session when they finish without erasing previously saved local history. Use `/new` interactively, `--new-session` for a one-shot run, or **Новый диалог** in Studio to clear both local history and the regular proxy session.
 
 Interactive commands are `/status`, `/mode <read-only|ask|full>`, `/models`, `/model <id>`, `/new`, `/undo`, `/help` and `/exit`. Use `--project-map --json` for machine-readable project inventory.
 

@@ -12,6 +12,7 @@ const agentInternals = require('../agent.js').__test;
 const agentCore = require('../lib/agent-core.js');
 const projectIndex = require('../lib/project-index.js');
 const studio = require('../studio-server.js');
+const { loadServerConfig } = require('../lib/server-config.js');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'fdsapi-test-'));
@@ -24,6 +25,16 @@ function runNode(args, opts = {}) {
     env: { ...process.env, ...opts.env },
   });
 }
+
+test('server configuration validates ports, limits and exact CORS origins', () => {
+  const config = loadServerConfig({ PORT: '9777', RATE_LIMIT_PER_MINUTE: '0', CORS_ORIGIN: 'https://app.example.com/' }, ROOT);
+  assert.equal(config.port, 9777);
+  assert.equal(config.rateLimitPerMinute, 0);
+  assert.equal(config.corsOrigin, 'https://app.example.com');
+  assert.throws(() => loadServerConfig({ PORT: '80' }, ROOT), /PORT/);
+  assert.throws(() => loadServerConfig({ MAX_REQUEST_BYTES: 'abc' }, ROOT), /MAX_REQUEST_BYTES/);
+  assert.throws(() => loadServerConfig({ CORS_ORIGIN: '*' }, ROOT), /CORS_ORIGIN/);
+});
 
 test('auth import copies valid deepseek-auth.json and chmods it to 0600', () => {
   const dir = tmpdir();
@@ -233,6 +244,12 @@ test('coding agent parses an explicit new conversation request', () => {
   assert.equal(agentInternals.parseArgs(['--new-session']).newSession, true);
 });
 
+test('coding agent supports a non-persistent history invocation', () => {
+  const options = agentInternals.parseArgs(['--no-history', 'private task']);
+  assert.equal(options.noHistory, true);
+  assert.equal(options.prompt, 'private task');
+});
+
 test('coding agent rejects missing option values and stops parsing after double dash', () => {
   assert.throws(() => agentInternals.parseArgs(['--workspace']), /требуется значение/i);
   assert.throws(() => agentInternals.parseArgs(['--max-steps']), /требуется значение/i);
@@ -330,6 +347,20 @@ test('coding agent keeps bounded conversation context per workspace', () => {
   assert.deepEqual(agentCore.loadConversation(first), []);
 });
 
+test('coding agent can disable, expire and tighten saved conversation history', () => {
+  const root = tmpdir();
+  assert.deepEqual(agentCore.saveConversationExchange(root, 'secret', 'answer', { historyEnabled: false }), []);
+  assert.equal(fs.existsSync(path.join(root, '.deepseek-agent', 'conversation.json')), false);
+  agentCore.saveConversationExchange(root, 'old', 'answer');
+  const file = path.join(root, '.deepseek-agent', 'conversation.json');
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  saved.exchanges[0].at = '2000-01-01T00:00:00.000Z';
+  fs.writeFileSync(file, JSON.stringify(saved));
+  assert.deepEqual(agentCore.loadConversation(root, { historyTtlDays: 1 }), []);
+  for (let i = 0; i < 5; i++) agentCore.saveConversationExchange(root, `request ${i}`, `answer ${i}`, { maxConversationExchanges: 2 });
+  assert.equal(agentCore.loadConversation(root).length, 2);
+});
+
 test('coding agent can recover mutations from a failed run', () => {
   const root = tmpdir();
   const file = path.join(root, 'partial.txt');
@@ -341,6 +372,20 @@ test('coding agent can recover mutations from a failed run', () => {
   const result = agentCore.undoLatestRun(root);
   assert.equal(result.runId, tx.id);
   assert.equal(fs.existsSync(file), false);
+});
+
+test('coding agent cancellation rolls its own transaction back', () => {
+  const root = tmpdir();
+  const file = path.join(root, 'cancelled.txt');
+  const tx = new agentCore.RunTransaction(root, 'cancelled task');
+  tx.before(file);
+  agentCore.atomicWrite(file, 'partial result');
+  tx.after(file);
+  const result = tx.rollback('cancelled');
+  assert.equal(result.runId, tx.id);
+  assert.equal(fs.existsSync(file), false);
+  const manifest = JSON.parse(fs.readFileSync(tx.manifestPath, 'utf8'));
+  assert.equal(manifest.status, 'cancelled');
 });
 
 test('coding agent runs an allowed executable without a shell', async () => {
@@ -423,7 +468,7 @@ test('Studio rejects DNS rebinding and cross-site mutation requests', () => {
   studio.assertLocalRequest({ method: 'GET', headers: { host: '127.0.0.1:9660' } }, 9660);
   studio.assertLocalRequest({ method: 'POST', headers: { host: 'localhost:9660', origin: 'http://localhost:9660', 'sec-fetch-site': 'same-origin' } }, 9660);
   assert.throws(() => studio.assertLocalRequest({ method: 'GET', headers: { host: 'attacker.test:9660' } }, 9660), /Host/);
-  assert.throws(() => studio.assertLocalRequest({ method: 'POST', headers: { host: '127.0.0.1:9660', origin: 'https:\/\/attacker.test' } }, 9660), /Origin/);
+  assert.throws(() => studio.assertLocalRequest({ method: 'POST', headers: { host: '127.0.0.1:9660', origin: 'https://attacker.test' } }, 9660), /Origin/);
   assert.throws(() => studio.assertLocalRequest({ method: 'POST', headers: { host: '127.0.0.1:9660', 'sec-fetch-site': 'cross-site' } }, 9660), /Cross-site/);
 });
 

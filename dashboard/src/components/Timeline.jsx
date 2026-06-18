@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Circle, LoaderCircle, Maximize2, Minimize2, TerminalSquare } from 'lucide-react';
+import { Check, Circle, LoaderCircle, Maximize2, Minimize2, TerminalSquare } from 'lucide-react';
 
 function statusIcon(status) {
   if (status === 'success') return <Check size={15}/>;
@@ -21,7 +21,7 @@ export function Timeline({ task, latestRun }) {
   const rows = toolEvents.length ? toolEvents : fallback;
   const output = task?.lines?.map(line => line.text).join('\n') || '';
   const lineCount = task?.lines?.length || 0;
-  const running = task?.status === 'running';
+  const running = ['running', 'cancelling'].includes(task?.status);
   useEffect(() => { followOutputRef.current = true; }, [task?.id]);
   useEffect(() => {
     if (!outputRef.current) return;
@@ -29,10 +29,10 @@ export function Timeline({ task, latestRun }) {
   }, [output]);
   return <section className={`timeline-section${compact ? ' compact' : ''}`}>
     <div className="section-title"><div><h1>Текущая задача</h1><p>{task?.prompt || latestRun?.task || 'Опишите задачу для агента'}</p></div><div className="section-controls"><button type="button" className="collapse-toggle" aria-label={compact ? 'Развернуть задачу' : 'Свернуть задачу'} onClick={() => setCompact(value => !value)}>{compact ? 'Развернуть' : 'Свернуть'}</button><TerminalSquare size={18}/></div></div>
-    {compact ? <div className="compact-summary"><span><strong>{rows.length}</strong> шагов</span><span><strong>{output ? lineCount : 0}</strong> строк</span>{running ? <span className="status-running">выполняется</span> : null}</div> : null}
+    {compact ? <div className="compact-summary"><span><strong>{rows.length}</strong> шагов</span><span><strong>{output ? lineCount : 0}</strong> строк</span>{running ? <span className="status-running">{task?.status === 'cancelling' ? 'останавливается' : 'выполняется'}</span> : null}</div> : null}
     <div className="timeline">
       {rows.map((event, index) => {
-        const running = task?.status === 'running' && index === rows.length - 1;
+        const running = ['running', 'cancelling'].includes(task?.status) && index === rows.length - 1;
         const status = running ? 'running' : event.ok === true ? 'success' : 'pending';
         return <div className={`timeline-row ${status}`} key={`${event.tool}-${index}`}>
           <span className="timeline-icon">{statusIcon(status)}</span>

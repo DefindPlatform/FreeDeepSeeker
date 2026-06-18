@@ -7,7 +7,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     for (const key of request.keys) {
       try {
         data[key] = localStorage.getItem(key) || '';
-      } catch (e) {
+      } catch {
         data[key] = '';
       }
     }

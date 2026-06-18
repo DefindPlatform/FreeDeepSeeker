@@ -38,7 +38,7 @@ async function readLocalStorage(tabId) {
       );
     });
     return results;
-  } catch (e) {
+  } catch {
     return {};
   }
 }

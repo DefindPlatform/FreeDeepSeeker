@@ -35,9 +35,13 @@
     "client": "node client.js",
     "agent": "node agent.js",
     "studio": "node studio-server.js",
-    "studio:build": "npm --prefix dashboard install && npm --prefix dashboard run build",
+    "studio:build": "npm --prefix dashboard ci && npm --prefix dashboard run build",
     "prepack": "npm run studio:build",
-    "test": "node --check server.js && node --check studio-server.js && node --check scripts/auth.js && node --check scripts/auth_import.js && node --check scripts/doctor.js && node --check scripts/deepseek_chrome_auth.js && node --check scripts/probe_deepseek_models.js && node --check scripts/check-docs.js && node --check client.js && node --check agent.js && node --check lib/agent-core.js && node --check lib/project-index.js && node --check scripts/live_agentic_smoke_tests.mjs && node scripts/check-docs.js && node --test tests/unit.test.js",
+    "lint": "eslint .",
+    "coverage": "node --test --experimental-test-coverage tests/*.test.js",
+    "audit": "npm audit --audit-level=high && npm --prefix dashboard audit --audit-level=high",
+    "check": "npm run lint && npm test && npm run studio:build && npm run audit",
+    "test": "node --check server.js && node --check studio-server.js && node --check scripts/auth.js && node --check scripts/auth_import.js && node --check scripts/doctor.js && node --check scripts/deepseek_chrome_auth.js && node --check scripts/probe_deepseek_models.js && node --check scripts/check-docs.js && node --check client.js && node --check agent.js && node --check lib/agent-core.js && node --check lib/project-index.js && node --check lib/server-config.js && node --check scripts/live_agentic_smoke_tests.mjs && node scripts/check-docs.js && node --test tests/*.test.js",
     "test:live": "node scripts/live_agentic_smoke_tests.mjs"
   },
   "keywords": [
@@ -54,5 +58,11 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/DefindPlatform/freedeepseekapi.git"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react": "^7.37.5",
+    "globals": "^15.15.0"
   }
 }

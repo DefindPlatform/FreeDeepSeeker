@@ -17,6 +17,7 @@ const path = require('path');
 const crypto = require('crypto');
 const readline = require('readline');
 const { spawnSync } = require('child_process');
+const { loadServerConfig } = require('./lib/server-config.js');
 
 const SERVER_HOST = os.hostname();  // Dynamic hostname detection
 const SERVER_PUBLIC_IP = (() => {
@@ -32,16 +33,8 @@ const SERVER_PUBLIC_IP = (() => {
 })();
 
 const FORGETMEAI_WATERMARK = 't.me/forgetmeai';
-const PORT = Number(process.env.PORT || 9655);
-const HOST = process.env.HOST || '127.0.0.1';
-const API_KEY = process.env.FREEDEEPSEEK_API_KEY || '';
-const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
-const configuredMaxRequestBytes = Number(process.env.MAX_REQUEST_BYTES || 2 * 1024 * 1024);
-const MAX_REQUEST_BYTES = Number.isFinite(configuredMaxRequestBytes) && configuredMaxRequestBytes >= 1024
-    ? configuredMaxRequestBytes
-    : 2 * 1024 * 1024;
-const configuredRateLimit = Number(process.env.RATE_LIMIT_PER_MINUTE || 120);
-const RATE_LIMIT_PER_MINUTE = Number.isFinite(configuredRateLimit) && configuredRateLimit >= 0 ? configuredRateLimit : 120;
+const SERVER_CONFIG = loadServerConfig();
+const { host: HOST, port: PORT, apiKey: API_KEY, corsOrigin: CORS_ORIGIN, maxRequestBytes: MAX_REQUEST_BYTES, rateLimitPerMinute: RATE_LIMIT_PER_MINUTE } = SERVER_CONFIG;
 const requestBuckets = new Map();
 function formatWatermark(prefix = 'ForgetMeAI') { return `${prefix}: ${FORGETMEAI_WATERMARK}`; }
 function printBanner() {
@@ -70,13 +63,9 @@ const MAX_MESSAGE_DEPTH = 100;  // auto-reset after this many messages
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;  // 2 hours
 
 // === DeepSeek Web API Config — loaded from external config file ===
-const DS_CONFIG_PATH = process.env.DEEPSEEK_AUTH_PATH || path.join(__dirname, 'deepseek-auth.json');
-const configuredCooldownMs = Number(process.env.DEEPSEEK_ACCOUNT_COOLDOWN_MS || 10 * 60 * 1000);
-const DEFAULT_ACCOUNT_COOLDOWN_MS = Number.isFinite(configuredCooldownMs) && configuredCooldownMs >= 1000
-    ? configuredCooldownMs
-    : 10 * 60 * 1000;
+const DS_CONFIG_PATH = SERVER_CONFIG.authPath;
+const DEFAULT_ACCOUNT_COOLDOWN_MS = SERVER_CONFIG.accountCooldownMs;
 let DS_CONFIG = {};
-let dsHeaders = {};
 const accounts = [];
 let accountRoundRobin = 0;
 function buildBaseHeaders(config = DS_CONFIG) {
@@ -127,7 +116,6 @@ function loadDeepSeekConfig({ fatal = true } = {}) {
         }
     }
     DS_CONFIG = accounts[0]?.config || {};
-    dsHeaders = accounts[0]?.headers || buildBaseHeaders({});
     if (accounts.length > 0) {
         console.log(`[DS-API] Loaded ${accounts.length} auth account(s): ${accounts.map(a => a.id).join(', ')}`);
         return true;

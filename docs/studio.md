@@ -14,7 +14,7 @@ The production dashboard is committed under `dashboard/dist/`. Rebuild it after 
 
 ## Conversation context
 
-Tasks in the same workspace reuse a deterministic session and saved project history, including across new agent processes and proxy restarts. The history stores up to 12 final request/result exchanges under `.deepseek-agent/conversation.json`. **Новый диалог** clears this file and resets the corresponding proxy session; it does not undo code changes.
+Tasks in the same workspace reuse a deterministic session and saved project history, including across new agent processes and proxy restarts. The default history stores up to 12 final request/result exchanges for 30 days under `.deepseek-agent/conversation.json`; limits are configurable in `.deepseek-agent.json`. Set `historyEnabled` to `false` to make Studio launch every task with isolated, non-persistent context. **Новый диалог** clears the regular project history and resets the corresponding proxy session; it does not undo code changes.
 
 ## Permission behavior
 
@@ -22,15 +22,17 @@ Tasks in the same workspace reuse a deterministic session and saved project hist
 - `ask`: Studio asks once before starting, then executes that approved task as `full`; individual tool operations do not open terminal prompts.
 - `full`: runs immediately with protected paths and command policy still enforced.
 
-Only one task can run at a time. Output is retained in memory up to 5000 lines. File mutations are recorded under `<workspace>/.deepseek-agent/` and can be undone while their post-run hashes still match.
+Only one task can run at a time. Studio receives task changes over a same-origin event stream and falls back to periodic refresh if it disconnects. **Остановить** asks the active agent process to mark its transaction cancelled, rolls back tool-made file mutations when configured, and then terminates it. Output is retained in memory up to 5000 lines. File mutations are recorded under `<workspace>/.deepseek-agent/` and can be undone while their post-run hashes still match.
 
 ## Local Studio API
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/events` | Same-origin server-sent events for task/context changes |
 | `GET` | `/api/state` | Workspace, API, task, conversation and transaction state |
 | `GET` | `/api/file?path=<relative>` | Read allowed text; binaries return a notice |
 | `POST` | `/api/tasks` | Start `{prompt, model, mode, approved}` |
+| `POST` | `/api/tasks/cancel` | Stop the active agent task |
 | `POST` | `/api/undo` | Undo the newest undoable transaction |
 | `POST` | `/api/session/reset` | Clear project conversation and proxy session |
 

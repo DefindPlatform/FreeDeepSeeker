@@ -14,7 +14,7 @@ async function post(path, body, timeoutMs = 120000) {
     });
     const text = await resp.text();
     let json = null;
-    try { json = JSON.parse(text); } catch {}
+    try { json = JSON.parse(text); } catch { /* Non-JSON errors are reported through text. */ }
     return { status: resp.status, ok: resp.ok, text, json };
   } finally { clearTimeout(timer); }
 }

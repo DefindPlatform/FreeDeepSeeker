@@ -132,6 +132,12 @@ function createStudioServer(options) {
   const apiHeaders = process.env.FREEDEEPSEEK_API_KEY ? { Authorization: `Bearer ${process.env.FREEDEEPSEEK_API_KEY}` } : {};
   const sessionId = core.workspaceSessionId(workspace);
   let task = null;
+  let activeChild = null;
+  const eventClients = new Set();
+  const publish = (type, payload = {}) => {
+    const message = `data: ${JSON.stringify({ type, ...payload })}\n\n`;
+    for (const client of eventClients) client.write(message);
+  };
 
   const state = async () => {
     const [health, models] = await Promise.all([
@@ -140,17 +146,17 @@ function createStudioServer(options) {
     ]);
     return {
       workspace,
-      config: { permissionMode: config.permissionMode },
+      config: { permissionMode: config.permissionMode, historyEnabled: config.historyEnabled },
       project: projectIndex.createProjectIndex(workspace, config),
       runs: loadRuns(workspace),
       task,
-      conversation: { sessionId, exchanges: core.loadConversation(workspace).length },
+      conversation: { sessionId, exchanges: core.loadConversation(workspace, config).length, enabled: config.historyEnabled },
       api: { online: Boolean(health), baseUrl: apiBaseUrl, health, models: models?.data || [] },
     };
   };
 
   const startTask = body => {
-    if (task?.status === 'running') throw new Error('Задача уже выполняется');
+    if (activeChild || ['running', 'cancelling'].includes(task?.status)) throw new Error('Задача уже выполняется');
     const prompt = String(body.prompt || '').trim();
     const model = String(body.model || 'deepseek-chat');
     const requestedMode = String(body.mode || 'ask');
@@ -160,21 +166,45 @@ function createStudioServer(options) {
     if (!prompt) throw new Error('Пустая задача');
     const taskRecord = { id: `studio-${Date.now()}`, prompt, model, mode: requestedMode, status: 'running', startedAt: new Date().toISOString(), lines: [] };
     task = taskRecord;
-    const child = spawn(process.execPath, [path.join(__dirname, 'agent.js'), '-C', workspace, '--mode', executionMode, '--model', model, '--', prompt], {
+    const child = (options.spawnAgent || spawn)(process.execPath, [path.join(__dirname, 'agent.js'), '-C', workspace, '--mode', executionMode, '--model', model, ...(config.historyEnabled ? [] : ['--no-history']), '--', prompt], {
       cwd: workspace,
       windowsHide: true,
       env: process.env,
     });
+    activeChild = child;
     taskRecord.pid = child.pid;
+    publish('task-started', { taskId: taskRecord.id });
     const append = (stream, chunk) => {
-      String(chunk).split(/\r?\n/).filter(Boolean).forEach(line => taskRecord.lines.push({ at: new Date().toISOString(), stream, text: line.replace(/\x1b\[[0-9;]*m/g, '') }));
+      const added = String(chunk).split(/\r?\n/).filter(Boolean).map(line => ({ at: new Date().toISOString(), stream, text: line.replace(/\x1b\[[0-9;]*m/g, '') }));
+      taskRecord.lines.push(...added);
       taskRecord.lines = taskRecord.lines.slice(-5000);
+      if (added.length) publish('task-output', { taskId: taskRecord.id, count: added.length });
     };
     child.stdout.on('data', chunk => append('stdout', chunk));
     child.stderr.on('data', chunk => append('stderr', chunk));
-    child.on('close', code => { taskRecord.status = code === 0 ? 'completed' : 'failed'; taskRecord.exitCode = code; taskRecord.finishedAt = new Date().toISOString(); });
-    child.on('error', error => { taskRecord.status = 'failed'; taskRecord.error = error.message; taskRecord.finishedAt = new Date().toISOString(); });
+    let settled = false;
+    const finish = (status, code, error) => {
+      if (settled) return;
+      settled = true;
+      taskRecord.status = status;
+      taskRecord.exitCode = code;
+      if (error) taskRecord.error = error.message;
+      taskRecord.finishedAt = new Date().toISOString();
+      if (activeChild === child) activeChild = null;
+      publish('task-finished', { taskId: taskRecord.id, status: taskRecord.status });
+    };
+    child.on('close', code => finish(taskRecord.cancelRequested ? 'cancelled' : (code === 0 ? 'completed' : 'failed'), code));
+    child.on('error', error => finish('failed', null, error));
     return taskRecord;
+  };
+
+  const cancelTask = () => {
+    if (!task || task.status !== 'running' || !activeChild) throw new Error('Нет выполняющейся задачи');
+    task.cancelRequested = true;
+    task.status = 'cancelling';
+    if (!activeChild.kill()) throw new Error('Не удалось остановить задачу');
+    publish('task-cancelling', { taskId: task.id });
+    return task;
   };
 
   return http.createServer(async (req, res) => {
@@ -182,6 +212,14 @@ function createStudioServer(options) {
       setSecurityHeaders(res);
       assertLocalRequest(req, options.port);
       const url = new URL(req.url, 'http://127.0.0.1');
+      if (req.method === 'GET' && url.pathname === '/api/events') {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
+        res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`);
+        eventClients.add(res);
+        const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15000);
+        req.on('close', () => { clearInterval(heartbeat); eventClients.delete(res); });
+        return;
+      }
       if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, await state());
       if (req.method === 'GET' && url.pathname === '/api/file') {
         const file = core.resolveWorkspacePath(workspace, url.searchParams.get('path') || '');
@@ -189,12 +227,14 @@ function createStudioServer(options) {
         return json(res, 200, { path: core.normalizeRelative(workspace, file), content: readStudioFile(file, config.maxFileBytes) });
       }
       if (req.method === 'POST' && url.pathname === '/api/tasks') return json(res, 202, startTask(await readJson(req)));
+      if (req.method === 'POST' && url.pathname === '/api/tasks/cancel') return json(res, 202, cancelTask());
       if (req.method === 'POST' && url.pathname === '/api/undo') return json(res, 200, core.undoLatestRun(workspace));
       if (req.method === 'POST' && url.pathname === '/api/session/reset') {
         core.clearConversation(workspace);
         const response = await fetch(`${apiBaseUrl}/reset-session?agent=${encodeURIComponent(sessionId)}&clear_history=true`, { method: 'POST', headers: apiHeaders }).catch(() => null);
         if (response && !response.ok && response.status !== 404) throw new Error(`Proxy не сбросил сессию: HTTP ${response.status}`);
         task = null;
+        publish('context-reset');
         return json(res, 200, { status: 'context_reset', sessionId });
       }
       if (url.pathname.startsWith('/api/')) return json(res, 404, { error: 'Not found' });

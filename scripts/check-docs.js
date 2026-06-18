@@ -16,7 +16,7 @@ function requireText(haystack, needle, label = needle) {
 }
 
 const runtimeFiles = [
-  'server.js', 'client.js', 'agent.js', 'studio-server.js',
+  'server.js', 'client.js', 'agent.js', 'studio-server.js', 'lib/server-config.js',
   'scripts/auth.js', 'scripts/auth_import.js', 'scripts/deepseek_chrome_auth.js', 'scripts/doctor.js',
 ];
 const runtime = runtimeFiles.map(source).join('\n');
@@ -34,17 +34,17 @@ for (const route of [
   requireText(docs['docs/api-documentation.md'], route, `documented route ${route}`);
 }
 
-for (const route of ['/api/state', '/api/file', '/api/tasks', '/api/undo', '/api/session/reset']) {
+for (const route of ['/api/events', '/api/state', '/api/file', '/api/tasks', '/api/tasks/cancel', '/api/undo', '/api/session/reset']) {
   requireText(source('studio-server.js'), route, `implemented Studio route ${route}`);
   requireText(docs['docs/studio.md'], route, `documented Studio route ${route}`);
 }
 
-for (const option of ['--login', '--no-stream', '--project-map', '--max-steps', '--new-session', '--undo']) {
+for (const option of ['--login', '--no-stream', '--project-map', '--max-steps', '--new-session', '--no-history', '--undo']) {
   requireText(runtime, option, `implemented option ${option}`);
   requireText(allDocs, option, `documented option ${option}`);
 }
 
-for (const key of ['permissionMode', 'protectedPaths', 'allowedPrograms', 'maxFileBytes', 'maxCommandOutputBytes', 'commandTimeoutMs', 'rollbackOnFailure']) {
+for (const key of ['permissionMode', 'protectedPaths', 'allowedPrograms', 'maxFileBytes', 'maxCommandOutputBytes', 'commandTimeoutMs', 'rollbackOnFailure', 'historyEnabled', 'historyTtlDays', 'maxConversationExchanges', 'maxConversationChars']) {
   requireText(source('lib/agent-core.js'), key, `implemented agent config ${key}`);
   requireText(docs['docs/coding-agent.md'], key, `documented agent config ${key}`);
 }

@@ -18,4 +18,4 @@ export function Insights({ project, latestRun, api }) {
 }
 
 function Metric({ icon, value, label }) { return <div>{icon}<strong>{value}</strong><span>{label}</span></div>; }
-function statusLabel(status) { return ({ completed: 'Транзакция завершена', running: 'Транзакция активна', failed: 'Запуск завершён с ошибкой', undone: 'Запуск откатан' })[status] || status; }
+function statusLabel(status) { return ({ completed: 'Транзакция завершена', running: 'Транзакция активна', failed: 'Запуск завершён с ошибкой', cancelled: 'Запуск отменён', undone: 'Запуск откатан' })[status] || status; }
