@@ -40,7 +40,7 @@ This project reverse-engineers the **DeepSeek Web chat API** (`chat.deepseek.com
                                                │  DeepSeek Web    │
                                                │  chat.deepseek   │
                                                │  .com            │
-                                               │  (Free V3 model) │
+                                               │ (DeepSeek Web)   │
                                                └──────────────────┘
 ```
 
@@ -175,8 +175,11 @@ GET /
 Response:
 {
   "status": "ok",
-  "model": "deepseek-chat",
-  "agents": <int>        ← number of active agent sessions
+  "service": "FreeDeepseekAPI",
+  "models": ["deepseek-chat", "deepseek-reasoner", "..."],
+  "agents": <int>,
+  "accounts": [...],
+  "config_ready": true|false
 }
 ```
 
@@ -374,10 +377,10 @@ Response:
 {
   "agents": [
     {
-      "agent": "security-guy",
+      "agent": "dev-agent",
       "session_id": "uuid",
       "message_count": 42,
-      "history_size": 5,
+      "history_size": 15,
       "age_min": 23
     }
   ],
@@ -394,8 +397,8 @@ POST /reset-session?agent=all
 Response (single):
 {
   "status": "session_reset",
-  "agent": "security-guy",
-  "history_preserved": 5,
+  "agent": "dev-agent",
+  "history_preserved": 15,
   "history": "user msg 1 | user msg 2 | ..."
 }
 
@@ -412,13 +415,12 @@ Response (all):
 
 ### 4.1 How Sessions Are Assigned
 
-Each request is assigned a session key based on the **client's remote IP**:
+Each request receives an isolated session key. Explicit identifiers take priority over the client IP:
 
-| Source IP | Session Key | Example |
-|---|---|---|
-| `127.0.0.1` (localhost) | `security-guy` | Security Guy's own gateway |
-| `::1` or `::ffff:127.0.0.1` | `security-guy` | IPv6 localhost |
-| Any external IP | `params.user` (if set) or remote IP | Agented by `user` field or IP |
+1. `x-agent-session` request header
+2. `session` or `user` request field (`metadata.user_id` is mapped to `user` by the Anthropic shim)
+3. `dev-agent` for loopback clients
+4. Remote client IP as a final fallback
 
 **Effect:** Each agent gets its own isolated DeepSeek web session. No context leakage between agents.
 
@@ -443,8 +445,9 @@ The proxy uses `user` from the request body. If not set, it falls back to the cl
   id: "uuid",                    // DeepSeek web session ID
   parentMessageId: <int|null>,   // Last message ID for threading
   createdAt: <timestamp>,        // Session creation time
-  messageCount: 0-50,            // Messages in this session
-  history: [                     // Last 5 exchanges for context recovery
+  accountId: "account_1",        // Sticky authenticated account
+  messageCount: 0-100,           // Messages in this session
+  history: [                     // Last 15 exchanges for context recovery
     { user: "...", assistant: "..." }
   ]
 }
@@ -481,7 +484,7 @@ arguments: {"arg1": "val1", ...}
 3. **Parsing:** The proxy uses a regex to match `*_CALL: name\narguments: <JSON>` patterns
 4. **JSON Extraction:** Uses a **balanced-brace parser** to extract JSON (handles nested braces and escaped strings)
 5. **Conversion:** The parsed tool call is converted to OpenAI `tool_calls` format with `finish_reason: "tool_calls"`
-6. **Execution:** The client (Hermes) receives the tool call, executes the tool, and sends the result back
+6. **Execution:** The compatible client receives the tool call, executes it, and sends the result back
 
 ### 5.2 TOOL_CALL Format
 
@@ -508,7 +511,7 @@ The parser traverses character by character tracking brace depth:
 
 - **Unreliable generation** — DeepSeek Web sometimes forgets the format, adds extra text, or returns malformed JSON
 - **No native tool support** — unlike the official API which has structured tool calls
-- **Session drops** — empty responses at ~17-34 messages require session reset
+- **Prompt-emulated tools** — malformed model output may require a retry
 
 ---
 
@@ -518,14 +521,15 @@ The parser traverses character by character tracking brace depth:
 
 | Condition | Action |
 |---|---|
-| Message count >= 50 | Auto-reset DeepSeek session, keep history buffer |
+| Message count >= 100 | Auto-reset DeepSeek session, keep history buffer |
 | Session age > 2 hours | Auto-reset (DeepSeek web session TTL) |
-| HTTP 400/404/500 response | Reset and retry once |
-| Empty content response | Return HTTP 502 (no retry) |
+| HTTP 400/404/500 response | Reset, solve a fresh PoW challenge, and retry once |
+| Empty content response | Reset and retry up to 10 times, then return HTTP 502 |
+| “Too frequent messages” response | Reset and retry up to 3 times with backoff |
 
 ### 6.2 History Buffer
 
-When a session is reset, the proxy preserves the **last 5 exchanges** (capped at ~3000 chars). On the next request, it injects them as context:
+When a session is reset, the proxy preserves the **last 15 exchanges** (capped at ~10000 chars). On the next request, it injects them as context:
 
 ```
 [Previous conversation]
@@ -546,7 +550,7 @@ arguments: {"command": "cat /etc/openvpn/server.conf"}
 If DeepSeek's web session expires (HTTP 400/404/500):
 1. Current session ID is cleared
 2. New session is created via `/api/v0/chat_session/create`
-3. Same PoW challenge is reused (to avoid re-solving)
+3. A fresh PoW challenge is fetched and solved
 4. Request is retried with `parent_message_id: null`
 5. History buffer is injected as context
 
@@ -554,24 +558,19 @@ If DeepSeek's web session expires (HTTP 400/404/500):
 
 ## 7. Configuration
 
-### 7.1 Proxy Configuration (in deepseek-api-server.js)
+### 7.1 Proxy Configuration (in `server.js`)
 
 ```javascript
-const MAX_HISTORY_LENGTH = 5;     // Keep last 5 exchanges
-const MAX_HISTORY_CHARS = 3000;   // Max chars for history buffer
-const MAX_MESSAGE_DEPTH = 50;     // Auto-reset after 50 messages
+const MAX_HISTORY_LENGTH = 15;    // Keep last 15 exchanges
+const MAX_HISTORY_CHARS = 10000;  // Max chars for history buffer
+const MAX_MESSAGE_DEPTH = 100;    // Auto-reset after 100 messages
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;  // 2 hours
 
-const DS_CONFIG = {
-  token: "...",                     // DeepSeek auth token
-  hif_dliq: "...",                  // Custom header
-  hif_leim: "...",                  // Custom header
-  cookie: "ds_session_id=...; smidV2=...",  // Browser cookies
-  wasmUrl: "https://fe-static.deepseek.com/chat/static/sha3_wasm_bg.<hash>.wasm",
-};
+// Credentials are loaded from deepseek-auth.json, DEEPSEEK_AUTH_PATH,
+// or all JSON files in DEEPSEEK_AUTH_DIR. Do not hard-code them in source.
 ```
 
-### 7.2 Hermes Agent Configuration
+### 7.2 Compatible Client Configuration
 
 ```yaml
 model:
@@ -624,6 +623,10 @@ curl -s http://127.0.0.1:9655/v1/chat/completions \
 | HTTP Code | Type | Meaning |
 |---|---|---|
 | 200 | OK | Response successful |
+| 400 | invalid_request_error | Malformed JSON or invalid request body |
+| 401 | authentication_error | Missing or invalid local API key |
+| 413 | request_too_large | Request body exceeded the configured limit |
+| 429 | rate_limit_error | Upstream account is cooling down or rate-limited |
 | 404 | Not found | Invalid endpoint |
 | 500 | server_error | Internal proxy error (exception) |
 | 502 | empty_response | DeepSeek returned empty content |
@@ -634,10 +637,10 @@ Error response format:
   "error": {
     "message": "DeepSeek returned empty content",
     "type": "empty_response",
-    "agent": "security-guy",
+    "agent": "dev-agent",
     "session_id": "uuid",
     "message_count": 17,
-    "history_length": 5
+    "history_length": 15
   }
 }
 ```
@@ -648,12 +651,12 @@ Error response format:
 
 | Issue | Cause | Impact |
 |---|---|---|
-| Empty responses at msg 17-34 | DeepSeek web session instability | Conversation interrupted, retry needed |
+| Empty responses | DeepSeek web session instability | Proxy retries with fresh sessions, then returns 502 |
 | No native tool calling | DeepSeek Web API doesn't support it | LLM may generate malformed tool calls |
 | Response time 3-17s | PoW + network to DeepSeek | Slower than official API |
 | Session TTL ~2h | DeepSeek web browser timeout | Periodic session resets |
 | Credentials expire | Browser tokens/cookies change | Proxy needs re-auth |
-| Same DeepSeek account | All agents share one web login | Rate limiting across all sessions |
+| Account-level limits | Sessions assigned to one login share its limits | Configure multiple auth files for account pooling |
 
 ---
 
@@ -662,7 +665,7 @@ Error response format:
 | Feature | Web API (Proxy) | Official API |
 |---|---|---|
 | **Cost** | Free | Paid (per-token) |
-| **Model** | DeepSeek V3 | DeepSeek V4 Flash / V3 |
+| **Model** | Current model exposed by DeepSeek Web (aliases documented by `/v1/models`) | Models offered by the official API |
 | **Tool calling** | Hacky (text injection) | Native (structured) |
 | **Streaming** | Yes | Yes |
 | **Reliability** | Medium (session drops) | High (SLA) |
@@ -673,13 +676,14 @@ Error response format:
 
 ---
 
-## 12. File Locations
+## 12. Project File Locations
 
 | File | Path |
 |---|---|
-| Proxy server | `/root/.hermes/profiles/security-guy/scripts/deepseek-api-server.js` |
-| Security Guy SOUL | `/root/.hermes/profiles/security-guy/SOUL.md` |
-| Security Guy config | `/root/.hermes/profiles/security-guy/config.yaml` |
-| Gateway logs | `/root/.hermes/profiles/security-guy/logs/gateway.log` |
-| Agent logs | `/root/.hermes/profiles/security-guy/logs/agent.log` |
-| Error logs | `/root/.hermes/profiles/security-guy/logs/errors.log` |
+| Proxy server | `server.js` |
+| CLI client | `client.js` |
+| Coding agent | `agent.js` and `lib/` |
+| Studio server/UI | `studio-server.js` and `dashboard/` |
+| Default auth file | `deepseek-auth.json` (gitignored) |
+| Agent state and undo data | `<workspace>/.deepseek-agent/` |
+| Runtime logs | Standard output/error of the running process |

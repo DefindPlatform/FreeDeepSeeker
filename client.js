@@ -49,8 +49,13 @@ function parseArgs(argv) {
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === '--') { positional.push(...argv.slice(i + 1)); break; }
     const [name, inlineValue] = arg.split(/=(.*)/s, 2);
-    const value = () => inlineValue !== undefined ? inlineValue : argv[++i];
+    const value = () => {
+      const result = inlineValue !== undefined ? inlineValue : argv[++i];
+      if (result === undefined || result === '') throw new Error(`Для ${name} требуется значение`);
+      return result;
+    };
     if (name === '--url') options.url = value();
     else if (name === '--model' || name === '-m') options.model = value();
     else if (name === '--system' || name === '-s') options.system = value();

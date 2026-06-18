@@ -118,4 +118,4 @@ for (const t of tests) {
     console.log(`FAIL ${t.name}: ${e.message}`);
   }
 }
-process.exit(failed ? 1 : 0);
+process.exitCode = failed ? 1 : 0;

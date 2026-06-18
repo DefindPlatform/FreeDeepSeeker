@@ -80,9 +80,9 @@ async function menu() {
 (async () => {
   const args = new Set(process.argv.slice(2));
   if (args.has('--help') || args.has('-h')) return printHelp();
-  if (args.has('--login') || args.has('--add') || args.has('--relogin')) return void runDirectAuth();
-  if (args.has('--import')) return void runImportAuth();
+  if (args.has('--login') || args.has('--add') || args.has('--relogin')) { if (!runDirectAuth()) process.exitCode = 1; return; }
+  if (args.has('--import')) { if (!runImportAuth()) process.exitCode = 1; return; }
   if (args.has('--status') || args.has('--list')) return status();
   if (args.has('--remove')) return removeLocalAuth();
   await menu();
-})();
+})().catch(error => { console.error(`[auth] ERROR: ${error.message}`); process.exitCode = 1; });

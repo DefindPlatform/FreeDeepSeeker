@@ -17,18 +17,35 @@ export function App() {
   const [model, setModel] = useState('deepseek-chat');
   const [mode, setMode] = useState('ask');
   const [pendingApproval, setPendingApproval] = useState(false);
+  const modeInitialized = useRef(false);
 
   const refresh = useCallback(async () => {
     try { setState(await getState()); setError(''); } catch (cause) { setError(cause.message); }
   }, []);
   useEffect(() => { refresh(); const timer = setInterval(refresh, 1500); return () => clearInterval(timer); }, [refresh]);
-  useEffect(() => { getFile(selected).then(file => setContent(file.content)).catch(cause => setContent(`// ${cause.message}`)); }, [selected]);
+  useEffect(() => {
+    if (!state || modeInitialized.current) return;
+    setMode(state.config?.permissionMode || 'ask');
+    modeInitialized.current = true;
+  }, [state]);
+  useEffect(() => {
+    if (!state?.project?.files?.length) return;
+    if (!selected || !state.project.files.some(file => file.path === selected)) setSelected(state.project.files[0].path);
+  }, [state, selected]);
+  useEffect(() => {
+    if (!selected) { setContent(''); return undefined; }
+    let active = true;
+    getFile(selected).then(file => { if (active) setContent(file.content); }).catch(cause => { if (active) setContent(`// ${cause.message}`); });
+    return () => { active = false; };
+  }, [selected]);
   useEffect(() => {
     const handler = event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); document.querySelector('.composer button')?.click(); } };
     window.addEventListener('keydown', handler); return () => window.removeEventListener('keydown', handler);
   }, []);
 
   const latestRun = state?.runs?.[0] || null;
+  const undoableRun = state?.runs?.find(run => ['completed', 'failed'].includes(run.status) && run.entries?.length) || null;
+  const diffRun = state?.runs?.find(run => run.diffs?.length) || null;
   const models = state?.api?.models || [];
   const running = state?.task?.status === 'running';
   const executeTask = async approved => {
@@ -39,11 +56,11 @@ export function App() {
   const undo = async () => { try { await undoRun(); await refresh(); } catch (cause) { setError(cause.message); } };
 
   if (!state) return <div className="loading"><Bot/> <span>{error || 'Загрузка Agent Studio…'}</span></div>;
-  const activeDiff = latestRun?.diffs?.[0] || null;
+  const activeDiff = diffRun?.diffs?.[0] || null;
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><Bot size={18}/><strong>DeepSeek Agent Studio</strong></div><TopItem icon={<HardDrive/>} label="Рабочая папка" value={state.workspace}/><ModelMenu models={models.length ? models : [{id:'deepseek-chat'}]} value={model} onChange={setModel}/><PermissionMenu value={mode} onChange={setMode}/><TopItem icon={<Box className={state.api.online ? 'online-icon' : 'offline-icon'}/>} label="Подключение" value={state.api.online ? 'Локально · 127.0.0.1:9655' : 'Нет соединения'}/></header>
+    <header className="topbar"><div className="brand"><Bot size={18}/><strong>DeepSeek Agent Studio</strong></div><TopItem icon={<HardDrive/>} label="Рабочая папка" value={state.workspace}/><ModelMenu models={models.length ? models : [{id:'deepseek-chat'}]} value={model} onChange={setModel}/><PermissionMenu value={mode} onChange={setMode}/><TopItem icon={<Box className={state.api.online ? 'online-icon' : 'offline-icon'}/>} label="Подключение" value={state.api.online ? state.api.baseUrl : 'Нет соединения'}/></header>
     {error ? <div className="error-banner">{error}<button onClick={() => setError('')}>×</button></div> : null}
-    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(latestRun?.entries?.length)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} running={running}/></main><Insights project={state.project} latestRun={latestRun} api={state.api}/></div>
+    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(undoableRun)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} running={running}/></main><Insights project={state.project} latestRun={latestRun} api={state.api}/></div>
     {pendingApproval ? <div className="modal-backdrop" role="presentation"><section className="approval-modal" role="dialog" aria-modal="true" aria-labelledby="approval-title"><ShieldAlert size={24}/><h2 id="approval-title">Разрешить изменения задачи?</h2><p>Agent получит режим full только для этого запуска. Все файловые изменения попадут в транзакцию и смогут быть откатаны.</p><pre>{prompt}</pre><div><button onClick={() => setPendingApproval(false)}>Отмена</button><button className="approve" onClick={() => executeTask(true)}>Подтвердить и запустить</button></div></section></div> : null}
   </div>;
 }

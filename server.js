@@ -6,8 +6,8 @@
  * parses LLM text responses for TOOL_CALL patterns, returns OpenAI tool_calls format.
  * 
  * Per-agent sessions: each unique `user` field gets its own DeepSeek web session.
- * Auto-reset: sessions reset when message chain > 50 messages or age > 2 hours.
- * Listens on 0.0.0.0:9655
+ * Auto-reset: sessions reset when message chain reaches 100 messages or age > 2 hours.
+ * Listens on 127.0.0.1:9655 by default.
  */
 
 const http = require('http');
@@ -71,7 +71,10 @@ const SESSION_TTL_MS = 2 * 60 * 60 * 1000;  // 2 hours
 
 // === DeepSeek Web API Config — loaded from external config file ===
 const DS_CONFIG_PATH = process.env.DEEPSEEK_AUTH_PATH || path.join(__dirname, 'deepseek-auth.json');
-const DEFAULT_ACCOUNT_COOLDOWN_MS = Number(process.env.DEEPSEEK_ACCOUNT_COOLDOWN_MS || 10 * 60 * 1000);
+const configuredCooldownMs = Number(process.env.DEEPSEEK_ACCOUNT_COOLDOWN_MS || 10 * 60 * 1000);
+const DEFAULT_ACCOUNT_COOLDOWN_MS = Number.isFinite(configuredCooldownMs) && configuredCooldownMs >= 1000
+    ? configuredCooldownMs
+    : 10 * 60 * 1000;
 let DS_CONFIG = {};
 let dsHeaders = {};
 const accounts = [];
@@ -235,7 +238,9 @@ function getOrCreateAgentSession(agentId) {
 }
 
 async function solvePOW(challenge, config = DS_CONFIG) {
+    if (!config.wasmUrl) throw new Error('Auth config has no wasmUrl');
     const resp = await fetch(config.wasmUrl);
+    if (!resp.ok) throw new Error(`Could not load DeepSeek PoW WASM: HTTP ${resp.status}`);
     const wasmBytes = await resp.arrayBuffer();
     const mod = await WebAssembly.instantiate(wasmBytes, { wbg: {} });
     const e = mod.instance.exports;
@@ -255,6 +260,32 @@ async function solvePOW(challenge, config = DS_CONFIG) {
     e.__wbindgen_add_to_stack_pointer(16);
     if (code === 0 || !Number.isFinite(ans) || ans <= 0) throw new Error('POW failed');
     return Math.floor(ans);
+}
+
+async function createPowHeader(account) {
+    const response = await fetch('https://chat.deepseek.com/api/v0/chat/create_pow_challenge', {
+        method: 'POST', headers: account.headers,
+        body: JSON.stringify({ target_path: '/api/v0/chat/completion' }),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+        markAccountFailure(account, response.status, 'pow challenge', response.headers.get('retry-after'));
+        throw new Error(`DeepSeek auth/network error while creating PoW challenge: HTTP ${response.status}. Run npm run doctor.`);
+    }
+    let payload;
+    try { payload = JSON.parse(text); }
+    catch { throw new Error(`DeepSeek returned non-JSON PoW response. First chars: ${text.substring(0, 120)}`); }
+    const challenge = payload?.data?.biz_data?.challenge;
+    if (!challenge) throw new Error('DeepSeek PoW response has no data.biz_data.challenge. Run npm run doctor, then npm run auth.');
+    const answer = await solvePOW(challenge, account.config);
+    return Buffer.from(JSON.stringify({
+        algorithm: challenge.algorithm,
+        challenge: challenge.challenge,
+        salt: challenge.salt,
+        answer,
+        signature: challenge.signature,
+        target_path: '/api/v0/chat/completion',
+    })).toString('base64');
 }
 
 const MODEL_CONFIGS = {
@@ -436,23 +467,7 @@ async function askDeepSeekStream(prompt, agentId, model = 'deepseek-default') {
         session.messageCount = 0;
     }
 
-    const cr = await fetch('https://chat.deepseek.com/api/v0/chat/create_pow_challenge', {
-        method: 'POST', headers: dsHeaders,
-        body: JSON.stringify({ target_path: '/api/v0/chat/completion' })
-    });
-    const chalText = await cr.text();
-    if (!cr.ok) {
-        markAccountFailure(account, cr.status, 'pow challenge');
-        throw new Error(`DeepSeek auth/network error while creating PoW challenge: HTTP ${cr.status}. Run npm run doctor. If auth expired, run npm run auth or npm run auth:import.`);
-    }
-    let chalJson;
-    try { chalJson = JSON.parse(chalText); }
-    catch (e) { throw new Error(`DeepSeek returned non-JSON PoW response. Run npm run doctor. First chars: ${chalText.substring(0, 120)}`); }
-    const challenge = chalJson?.data?.biz_data?.challenge;
-    if (!challenge) {
-        throw new Error('DeepSeek PoW response has no data.biz_data.challenge. Auth may be expired, captcha may be required, or DeepSeek changed Web API. Run npm run doctor, then npm run auth.');
-    }
-    const answer = await solvePOW(challenge, account.config);
+    const powB64 = await createPowHeader(account);
 
     if (!session.id) {
         const sr = await fetch('https://chat.deepseek.com/api/v0/chat_session/create', {
@@ -473,11 +488,6 @@ async function askDeepSeekStream(prompt, agentId, model = 'deepseek-default') {
         console.log(`${agentTag} Reusing session: ${session.id} (parent: ${session.parentMessageId}, msg#${session.messageCount})`);
     }
 
-    const powB64 = Buffer.from(JSON.stringify({
-        algorithm: challenge.algorithm, challenge: challenge.challenge,
-        salt: challenge.salt, answer: answer,
-        signature: challenge.signature, target_path: '/api/v0/chat/completion'
-    })).toString('base64');
     const resp = await fetch('https://chat.deepseek.com/api/v0/chat/completion', {
         method: 'POST',
         headers: { ...dsHeaders, 'X-DS-PoW-Response': powB64 },
@@ -518,11 +528,7 @@ async function askDeepSeekStream(prompt, agentId, model = 'deepseek-default') {
             session.createdAt = Date.now();
             console.log(`${agentTag} Created new session: ${session.id}`);
 
-            const newPowB64 = Buffer.from(JSON.stringify({
-                algorithm: challenge.algorithm, challenge: challenge.challenge,
-                salt: challenge.salt, answer: answer,
-                signature: challenge.signature, target_path: '/api/v0/chat/completion'
-            })).toString('base64');
+            const newPowB64 = await createPowHeader(account);
             const resp2 = await fetch('https://chat.deepseek.com/api/v0/chat/completion', {
                 method: 'POST',
                 headers: { ...dsHeaders, 'X-DS-PoW-Response': newPowB64 },
@@ -900,8 +906,12 @@ function writeSse(res, event, data) {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
+function streamHeaders() {
+    return { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' };
+}
+
 function sendAnthropicStream(res, openaiResp) {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(200, streamHeaders());
     const choice = openaiResp.choices[0];
     const msg = choice.message || {};
     const message = toAnthropicResponse(openaiResp);
@@ -972,7 +982,7 @@ function toResponsesResponse(openaiResp) {
 }
 
 function sendResponsesStream(res, openaiResp) {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(200, streamHeaders());
     const response = toResponsesResponse(openaiResp);
     const choice = openaiResp.choices[0];
     const msg = choice.message || {};
@@ -1014,7 +1024,7 @@ function sendResponsesStream(res, openaiResp) {
 }
 
 function sendOpenAIStream(res, openaiResp) {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*' });
+    res.writeHead(200, streamHeaders());
     const choice = openaiResp.choices[0];
     const msg = choice.message || {};
     const id = openaiResp.id;
@@ -1276,7 +1286,9 @@ const server = http.createServer(async (req, res) => {
     req.on('end', async () => {
         if (requestTooLarge) return;
         try {
-            const rawParams = JSON.parse(body || '{}');
+            let rawParams;
+            try { rawParams = JSON.parse(body || '{}'); }
+            catch { const error = new Error('Request body is not valid JSON'); error.statusCode = 400; throw error; }
             const params = normalizeApiParams(rawParams, apiMode);
             const messages = params.messages || [];
             const tools = params.tools || [];
@@ -1580,8 +1592,13 @@ const server = http.createServer(async (req, res) => {
             }
         } catch (e) {
             console.log('[DS-API] Error:', e.message);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: e.message, type: 'server_error' } }));
+            if (res.headersSent) {
+                if (!res.writableEnded) res.end();
+                return;
+            }
+            const status = e.statusCode || 500;
+            res.writeHead(status, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: e.message, type: status === 400 ? 'invalid_request_error' : 'server_error' } }));
         }
     });
 });
@@ -1687,5 +1704,6 @@ module.exports = {
         isDeepSeekModelErrorEvent,
         rebuildFragmentText,
         applyResponsePatchOperations,
+        streamHeaders,
     },
 };

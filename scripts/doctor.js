@@ -9,10 +9,14 @@ function isTruthy(v) { return /^(1|true|yes|on)$/i.test(String(v || '')); }
 function argHas(args, ...names) { return args.some(a => names.includes(a)); }
 function authPaths() {
   if (process.env.DEEPSEEK_AUTH_DIR) {
-    return fs.readdirSync(process.env.DEEPSEEK_AUTH_DIR)
-      .filter(f => f.endsWith('.json'))
-      .sort()
-      .map(f => path.join(process.env.DEEPSEEK_AUTH_DIR, f));
+    try {
+      return fs.readdirSync(process.env.DEEPSEEK_AUTH_DIR)
+        .filter(f => f.endsWith('.json'))
+        .sort()
+        .map(f => path.join(process.env.DEEPSEEK_AUTH_DIR, f));
+    } catch {
+      return [path.join(process.env.DEEPSEEK_AUTH_DIR, '(directory unavailable)')];
+    }
   }
   if (process.env.DEEPSEEK_AUTH_PATH && process.env.DEEPSEEK_AUTH_PATH.includes(',')) {
     return process.env.DEEPSEEK_AUTH_PATH.split(',').map(s => s.trim()).filter(Boolean);

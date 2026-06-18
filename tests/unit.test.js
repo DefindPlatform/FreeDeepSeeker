@@ -196,6 +196,13 @@ test('CLI auto-start is limited to local API addresses', () => {
   assert.equal(clientInternals.parseArgs(['--no-auto-start']).autoStart, false);
 });
 
+test('CLI rejects missing option values and accepts a prompt starting with dashes', () => {
+  assert.throws(() => clientInternals.parseArgs(['--model']), /требуется значение/i);
+  assert.throws(() => clientInternals.parseArgs(['--url']), /требуется значение/i);
+  const args = clientInternals.parseArgs(['--', '--explain-this']);
+  assert.equal(args.prompt, '--explain-this');
+});
+
 test('coding agent confines paths to its workspace', () => {
   const root = tmpdir();
   const nested = path.join(root, 'src');
@@ -222,6 +229,14 @@ test('coding agent parses project-map output flags', () => {
   assert.equal(args.json, true);
 });
 
+test('coding agent rejects missing option values and stops parsing after double dash', () => {
+  assert.throws(() => agentInternals.parseArgs(['--workspace']), /требуется значение/i);
+  assert.throws(() => agentInternals.parseArgs(['--max-steps']), /требуется значение/i);
+  const args = agentInternals.parseArgs(['--', '--yes']);
+  assert.equal(args.yes, false);
+  assert.equal(args.prompt, '--yes');
+});
+
 test('coding agent recognizes the user home directory as an unsafe default workspace', () => {
   assert.equal(agentInternals.isHomeWorkspace(os.homedir()), true);
   assert.equal(agentInternals.isHomeWorkspace(ROOT), false);
@@ -243,6 +258,7 @@ test('coding agent protects secrets and rejects unsafe command paths', () => {
   assert.equal(agentCore.isProtectedPath(root, path.join(root, '.env')), true);
   assert.throws(() => agentCore.assertAccessible(root, path.join(root, '.env'), config), /защищённый путь/i);
   assert.throws(() => agentCore.validateCommand('powershell', [], root, config), /не разрешена/i);
+  assert.throws(() => agentCore.validateCommand(path.join(root, 'node'), [], root, config), /имя программы без пути/i);
   assert.throws(() => agentCore.validateCommand('node', ['../outside.js'], root, config), /выходом из рабочей папки/i);
   assert.equal(agentCore.validateCommand('npm', ['test'], root, config), 'npm');
 });
@@ -253,11 +269,28 @@ test('repository config cannot silently elevate agent privileges', () => {
     permissionMode: 'full',
     allowProtectedPaths: true,
     maxFileBytes: 999999999,
+    allowedPrograms: ['node', 'powershell', 'made-up-program'],
   }));
   const config = agentCore.loadProjectConfig(root);
   assert.equal(config.permissionMode, 'ask');
   assert.equal(config.allowProtectedPaths, false);
   assert.equal(config.maxFileBytes, 10 * 1024 * 1024);
+  assert.deepEqual(config.allowedPrograms, ['node']);
+});
+
+test('coding agent strips common secret environment variables', () => {
+  const env = agentCore.sanitizeEnvironment({
+    PATH: 'safe-path',
+    HOME: 'safe-home',
+    FREEDEEPSEEK_API_KEY: 'secret',
+    AWS_ACCESS_KEY_ID: 'secret',
+    ORDINARY_VALUE: 'not-forwarded',
+  });
+  assert.equal(env.PATH, 'safe-path');
+  assert.equal(env.HOME, 'safe-home');
+  assert.equal(env.FREEDEEPSEEK_API_KEY, undefined);
+  assert.equal(env.AWS_ACCESS_KEY_ID, undefined);
+  assert.equal(env.ORDINARY_VALUE, 'not-forwarded');
 });
 
 test('coding agent transaction can undo file creation and modification', () => {
@@ -333,6 +366,17 @@ test('project index maps the full workspace while excluding secrets and dependen
   assert.equal(projectIndex.projectMapPage(index, { query: 'tests' }).totalMatched, 1);
 });
 
+test('project index reports truncation only when more files exist', () => {
+  const root = tmpdir();
+  fs.writeFileSync(path.join(root, 'a.txt'), 'a');
+  fs.writeFileSync(path.join(root, 'b.txt'), 'b');
+  const exact = projectIndex.createProjectIndex(root, agentCore.loadProjectConfig(root), { limit: 100 });
+  for (let i = 0; i < 100; i++) fs.writeFileSync(path.join(root, `file-${i}.txt`), String(i));
+  const limited = projectIndex.createProjectIndex(root, agentCore.loadProjectConfig(root), { limit: 100 });
+  assert.equal(exact.truncated, false);
+  assert.equal(limited.truncated, true);
+});
+
 test('Studio parses a fixed workspace and validates its local port', () => {
   const root = tmpdir();
   const options = studio.parseArgs(['-C', root, '--port', '9777']);
@@ -340,6 +384,21 @@ test('Studio parses a fixed workspace and validates its local port', () => {
   assert.equal(options.port, 9777);
   assert.throws(() => studio.parseArgs(['--port', '80']), /Некорректный --port/);
   assert.throws(() => studio.parseArgs(['--unknown']), /Неизвестный параметр/);
+  assert.throws(() => studio.parseArgs(['--workspace']), /требуется значение/i);
+});
+
+test('Studio refuses directories and binary files in the text viewer', () => {
+  const root = tmpdir();
+  const binary = path.join(root, 'image.bin');
+  fs.writeFileSync(binary, Buffer.from([0, 1, 2, 3]));
+  assert.throws(() => studio.readStudioFile(root, 1024), /не является файлом/i);
+  assert.match(studio.readStudioFile(binary, 1024), /бинарный файл/i);
+});
+
+test('stream responses do not bypass the configured CORS policy', () => {
+  const headers = serverInternals.streamHeaders();
+  assert.equal(headers['Access-Control-Allow-Origin'], undefined);
+  assert.equal(headers['Content-Type'], 'text/event-stream');
 });
 
 test('Studio rejects DNS rebinding and cross-site mutation requests', () => {

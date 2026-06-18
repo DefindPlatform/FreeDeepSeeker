@@ -82,6 +82,9 @@ $('btnCopy').addEventListener('click', () => {
   navigator.clipboard.writeText(json).then(() => {
     $('btnCopy').textContent = '✅ Copied!';
     setTimeout(() => { $('btnCopy').textContent = '📋 Copy JSON'; }, 1500);
+  }).catch((error) => {
+    $('status').className = 'status err';
+    $('status').textContent = `❌ Copy failed: ${error.message}`;
   });
 });
 
@@ -94,7 +97,7 @@ $('btnSave').addEventListener('click', () => {
   a.href = url;
   a.download = 'deepseek-auth.json';
   a.click();
-  URL.revokeObjectURL(url);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
   $('btnSave').textContent = '✅ Saved!';
   setTimeout(() => { $('btnSave').textContent = '💾 Download File'; }, 1500);
 });

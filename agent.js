@@ -25,8 +25,13 @@ function parseArgs(argv) {
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === '--') { positional.push(...argv.slice(i + 1)); break; }
     const [name, inlineValue] = arg.split(/=(.*)/s, 2);
-    const value = () => inlineValue !== undefined ? inlineValue : argv[++i];
+    const value = () => {
+      const result = inlineValue !== undefined ? inlineValue : argv[++i];
+      if (result === undefined || result === '') throw new Error(`Для ${name} требуется значение`);
+      return result;
+    };
     if (name === '--workspace' || name === '-C') options.workspace = value();
     else if (name === '--url') options.url = value();
     else if (name === '--model' || name === '-m') options.model = value();
@@ -307,9 +312,9 @@ async function executeTool(name, args, context) {
     const count = current.split(oldText).length - 1;
     if (!count) throw new Error('old_text не найден в файле');
     if (!args.replace_all && count > 1) throw new Error(`old_text найден ${count} раз; уточните фрагмент или установите replace_all=true`);
-    if (!await authorizeMutation(context, `Изменить ${relativePath(root, target)} (${args.replace_all ? count : 1} замена)?`)) return { ok: false, denied: true, mode: config.permissionMode };
     const updated = args.replace_all ? current.split(oldText).join(newText) : current.replace(oldText, newText);
     if (config.permissionMode === 'ask') printChangePreview(current, updated);
+    if (!await authorizeMutation(context, `Изменить ${relativePath(root, target)} (${args.replace_all ? count : 1} замена)?`)) return { ok: false, denied: true, mode: config.permissionMode };
     transaction.before(target);
     core.atomicWrite(target, updated);
     transaction.after(target);

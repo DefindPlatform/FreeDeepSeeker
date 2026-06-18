@@ -115,6 +115,6 @@ async function main(argv = process.argv.slice(2)) {
 }
 
 if (require.main === module) {
-  main().then(code => process.exit(code)).catch(e => { console.error('[auth:import] ERROR:', e.message); process.exit(1); });
+  main().then(code => { process.exitCode = code; }).catch(e => { console.error('[auth:import] ERROR:', e.message); process.exitCode = 1; });
 }
 module.exports = { normalizeAuth, validateAuth, secureWriteJson };

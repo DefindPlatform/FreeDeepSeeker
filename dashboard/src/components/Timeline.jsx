@@ -11,6 +11,7 @@ export function Timeline({ task, latestRun }) {
   const [expanded, setExpanded] = useState(false);
   const [compact, setCompact] = useState(false);
   const outputRef = useRef(null);
+  const followOutputRef = useRef(true);
   const events = latestRun?.events || [];
   const toolEvents = events.filter(event => event.type === 'tool_result');
   const fallback = [
@@ -21,13 +22,10 @@ export function Timeline({ task, latestRun }) {
   const output = task?.lines?.map(line => line.text).join('\n') || '';
   const lineCount = task?.lines?.length || 0;
   const running = task?.status === 'running';
+  useEffect(() => { followOutputRef.current = true; }, [task?.id]);
   useEffect(() => {
     if (!outputRef.current) return;
-    const node = outputRef.current;
-    const atBottom = Math.abs(node.scrollTop + node.clientHeight - node.scrollHeight) <= 8;
-    if (atBottom) {
-      node.scrollTop = node.scrollHeight;
-    }
+    if (followOutputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
   }, [output]);
   return <section className={`timeline-section${compact ? ' compact' : ''}`}>
     <div className="section-title"><div><h1>Текущая задача</h1><p>{task?.prompt || latestRun?.task || 'Опишите задачу для агента'}</p></div><div className="section-controls"><button type="button" className="collapse-toggle" aria-label={compact ? 'Развернуть задачу' : 'Свернуть задачу'} onClick={() => setCompact(value => !value)}>{compact ? 'Развернуть' : 'Свернуть'}</button><TerminalSquare size={18}/></div></div>
@@ -45,7 +43,7 @@ export function Timeline({ task, latestRun }) {
     </div>
     {output ? <div className={`task-output-panel${expanded ? ' expanded' : ''}`}>
       <header><span><TerminalSquare size={13}/> Ответ DeepSeek <small>{task.lines.length} строк</small></span><button type="button" aria-label={expanded ? 'Свернуть ответ' : 'Развернуть ответ'} title={expanded ? 'Свернуть' : 'На весь экран'} onClick={() => setExpanded(value => !value)}>{expanded ? <Minimize2/> : <Maximize2/>}</button></header>
-      <pre className="task-output" ref={outputRef}>{output}</pre>
+      <pre className="task-output" ref={outputRef} onScroll={event => { const node = event.currentTarget; followOutputRef.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 16; }}>{output}</pre>
       {!expanded ? <span className="resize-hint">Потяните нижний край, чтобы изменить высоту</span> : null}
     </div> : null}
   </section>;

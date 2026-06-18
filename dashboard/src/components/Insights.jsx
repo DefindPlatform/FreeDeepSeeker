@@ -12,7 +12,7 @@ export function Insights({ project, latestRun, api }) {
       <Metric icon={<Database/>} value={`${(project.totalBytes / 1024).toFixed(1)} КБ`} label="размер"/>
     </div>
     <section className="language-section"><h3>Языки <span>по файлам</span></h3>{project.languages.slice(0, 8).map((item, index) => <div className="language-row" key={item.name}><span>{item.name}</span><i><b style={{width: `${item.count / max * 100}%`, background: COLORS[index % COLORS.length]}}/></i><strong>{item.count}</strong></div>)}</section>
-    <section className="status-section"><h3>API</h3><div className={`health ${api.online ? 'healthy' : 'offline'}`}><span/><strong>{api.online ? 'Подключено' : 'Недоступно'}</strong><small>127.0.0.1:9655</small></div></section>
+    <section className="status-section"><h3>API</h3><div className={`health ${api.online ? 'healthy' : 'offline'}`}><span/><strong>{api.online ? 'Подключено' : 'Недоступно'}</strong><small>{api.baseUrl || 'не настроен'}</small></div></section>
     <section className="audit-section"><h3>Аудит</h3><div className="audit-box"><ShieldCheck size={20}/><div><strong>{latestRun ? statusLabel(latestRun.status) : 'Нет запусков'}</strong><small>{latestRun?.id || 'История появится после задачи'}</small></div></div></section>
   </aside>;
 }

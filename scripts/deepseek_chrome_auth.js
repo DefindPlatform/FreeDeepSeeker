@@ -18,6 +18,7 @@
 */
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const readline = require('readline');
 
@@ -28,8 +29,9 @@ const profileDir =
     path.join(repoRoot, '.chrome-for-testing-profile-deepseek');
 // Use a dedicated default port so an older normal-Chrome auth window on 9333 is not reused.
 const port = Number(process.env.DEEPSEEK_CHROME_PORT || 9334);
+const configuredAuthPath = process.env.DEEPSEEK_AUTH_PATH || '';
 const outPath =
-    process.env.DEEPSEEK_AUTH_PATH || path.join(repoRoot, 'deepseek-auth.json');
+    configuredAuthPath && !configuredAuthPath.includes(',') ? configuredAuthPath : path.join(repoRoot, 'deepseek-auth.json');
 const url = 'https://chat.deepseek.com/';
 const reuseChrome = /^(1|true|yes|on)$/i.test(
     process.env.DEEPSEEK_REUSE_CHROME || '',
@@ -65,6 +67,11 @@ function killExistingTestingChrome() {
 
 function removeProfileSafely(dir) {
     if (!fs.existsSync(dir)) return;
+    const resolved = path.resolve(dir);
+    const forbidden = new Set([path.parse(resolved).root, path.resolve(os.homedir()), repoRoot]);
+    if (forbidden.has(resolved) || !/(deepseek|chrome.*profile|profile.*deepseek)/i.test(path.basename(resolved))) {
+        throw new Error(`Refusing to remove unsafe Chrome profile path: ${resolved}`);
+    }
     for (let i = 0; i < 5; i++) {
         try {
             fs.rmSync(dir, {
@@ -149,7 +156,7 @@ function resolveChromePath() {
                         // Also consider that executable might be chrome.exe or chrome-win64\chrome.exe.
                         return [
                             path.join(baseDir, 'chrome-win64', 'chrome.exe'),
-                            path.join(baseDir, 'chrome-win64', 'chrome.exe'),
+                            path.join(baseDir, 'chrome-win', 'chrome.exe'),
                         ];
                     }
                     // linux
@@ -163,6 +170,15 @@ function resolveChromePath() {
                 .reverse();
             if (candidates[0]) return candidates[0];
         } catch {}
+    }
+
+    if (process.platform !== 'win32') {
+        for (const name of ['google-chrome-stable', 'google-chrome', 'chromium', 'chromium-browser']) {
+            try {
+                const candidate = execFileSync('which', [name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+                if (candidate && fs.existsSync(candidate)) return candidate;
+            } catch {}
+        }
     }
 
     // Last resort: OS-default Chrome locations.
@@ -403,6 +419,7 @@ If Chrome is installed elsewhere, set CHROME_PATH to the real executable path.`;
 }
 
 async function main() {
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error(`Invalid DEEPSEEK_CHROME_PORT: ${port}`);
     if (!fs.existsSync(chromePath))
         throw new Error(chromeInstallHelp(chromePath));
 
@@ -469,7 +486,9 @@ async function main() {
         await sleep(500);
     }
     const { href, cookiesCount, ...persisted } = auth;
-    fs.writeFileSync(outPath, JSON.stringify(persisted, null, 2));
+    fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
+    fs.writeFileSync(outPath, JSON.stringify(persisted, null, 2), { mode: 0o600 });
+    if (process.platform !== 'win32') fs.chmodSync(outPath, 0o600);
     console.log(`[auth] Saved: ${outPath}`);
     console.log(`[auth] page: ${href || 'unknown'}`);
     console.log(
@@ -486,5 +505,5 @@ async function main() {
 }
 main().catch((e) => {
     console.error('[auth] ERROR:', e);
-    process.exit(1);
+    process.exitCode = 1;
 });

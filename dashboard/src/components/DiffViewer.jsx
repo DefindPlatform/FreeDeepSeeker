@@ -1,7 +1,7 @@
 import { FileCode2, RotateCcw } from 'lucide-react';
 
 export function DiffViewer({ file, content, diff, onUndo, canUndo }) {
-  const lines = (content || '// Выберите файл слева, чтобы увидеть его содержимое').split('\n').slice(0, 18);
+  const lines = (content || '// Выберите файл слева, чтобы увидеть его содержимое').split('\n');
   return <section className="diff-panel">
     <header><div><FileCode2 size={15}/><strong>{file || 'Файл не выбран'}</strong></div><button onClick={onUndo} disabled={!canUndo}><RotateCcw size={14}/>Откатить запуск</button></header>
     {diff ? <div className="split-diff" aria-label="Изменения последнего запуска"><DiffSide kind="removed" lines={diff.removed} start={diff.startLine}/><DiffSide kind="added" lines={diff.added} start={diff.startLine}/></div>

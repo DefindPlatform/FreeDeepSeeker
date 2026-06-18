@@ -10,7 +10,7 @@ FreeDeepseekAPI — локальный OpenAI-/Anthropic-совместимый 
 
 ```bash
 git clone https://github.com/DefindPlatform/freedeepseekapi.git
-cd FreeDeepseekAPI
+cd freedeepseekapi
 npm install
 npm run auth
 npm start
@@ -32,7 +32,7 @@ DEEPSEEK_AUTH_PATH=./deepseek-auth.json NON_INTERACTIVE=1 npm start
 
 ## Требования
 
-- Node.js `>= 18`
+- Node.js `>= 18` для API/CLI; Node.js `>= 20.19` для пересборки Studio (требование Vite)
 - Chrome/Chromium для интерактивной авторизации
 - Интернет для доступа к `chat.deepseek.com`
 

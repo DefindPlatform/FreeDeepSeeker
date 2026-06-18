@@ -10,8 +10,14 @@ function parseArgs(argv) {
   const options = { workspace: process.cwd(), port: 9660 };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === '-C' || arg === '--workspace') options.workspace = argv[++i];
-    else if (arg === '--port') options.port = Number(argv[++i]);
+    if (arg === '-C' || arg === '--workspace') {
+      if (argv[i + 1] === undefined) throw new Error(`Для ${arg} требуется значение`);
+      options.workspace = argv[++i];
+    }
+    else if (arg === '--port') {
+      if (argv[i + 1] === undefined) throw new Error('Для --port требуется значение');
+      options.port = Number(argv[++i]);
+    }
     else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`Неизвестный параметр: ${arg}`);
   }
@@ -88,6 +94,15 @@ function readOptionalText(file) {
   } catch { return ''; }
 }
 
+function readStudioFile(file, maxBytes) {
+  const stat = fs.statSync(file);
+  if (!stat.isFile()) throw new Error('Выбранный путь не является файлом');
+  if (stat.size > maxBytes) throw new Error(`Файл слишком большой для просмотра: ${stat.size} байт`);
+  const buffer = fs.readFileSync(file);
+  if (buffer.includes(0)) return `// Бинарный файл (${stat.size} байт) нельзя показать как текст.`;
+  return buffer.toString('utf8');
+}
+
 function buildEntryDiff(workspace, runDir, entry) {
   const target = path.join(workspace, entry.path);
   const backup = entry.backup ? path.join(runDir, entry.backup) : null;
@@ -113,12 +128,14 @@ function createStudioServer(options) {
   const workspace = fs.realpathSync(options.workspace);
   const config = core.loadProjectConfig(workspace);
   const dist = path.join(__dirname, 'dashboard', 'dist');
+  const apiBaseUrl = String(process.env.DEEPSEEK_API_URL || 'http://127.0.0.1:9655').replace(/\/+$/, '');
+  const apiHeaders = process.env.FREEDEEPSEEK_API_KEY ? { Authorization: `Bearer ${process.env.FREEDEEPSEEK_API_KEY}` } : {};
   let task = null;
 
   const state = async () => {
     const [health, models] = await Promise.all([
-      fetch('http://127.0.0.1:9655/health').then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch('http://127.0.0.1:9655/v1/models').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${apiBaseUrl}/health`, { headers: apiHeaders }).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${apiBaseUrl}/v1/models`, { headers: apiHeaders }).then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     return {
       workspace,
@@ -126,7 +143,7 @@ function createStudioServer(options) {
       project: projectIndex.createProjectIndex(workspace, config),
       runs: loadRuns(workspace),
       task,
-      api: { online: Boolean(health), health, models: models?.data || [] },
+      api: { online: Boolean(health), baseUrl: apiBaseUrl, health, models: models?.data || [] },
     };
   };
 
@@ -139,22 +156,23 @@ function createStudioServer(options) {
     if (requestedMode === 'ask' && body.approved !== true) throw new Error('Для режима ask требуется подтверждение задачи');
     const executionMode = requestedMode === 'ask' ? 'full' : requestedMode;
     if (!prompt) throw new Error('Пустая задача');
-    task = { id: `studio-${Date.now()}`, prompt, model, mode: requestedMode, status: 'running', startedAt: new Date().toISOString(), lines: [] };
-    const child = spawn(process.execPath, [path.join(__dirname, 'agent.js'), '-C', workspace, '--mode', executionMode, '--model', model, prompt], {
+    const taskRecord = { id: `studio-${Date.now()}`, prompt, model, mode: requestedMode, status: 'running', startedAt: new Date().toISOString(), lines: [] };
+    task = taskRecord;
+    const child = spawn(process.execPath, [path.join(__dirname, 'agent.js'), '-C', workspace, '--mode', executionMode, '--model', model, '--', prompt], {
       cwd: workspace,
       windowsHide: true,
       env: process.env,
     });
-    task.pid = child.pid;
+    taskRecord.pid = child.pid;
     const append = (stream, chunk) => {
-      String(chunk).split(/\r?\n/).filter(Boolean).forEach(line => task.lines.push({ at: new Date().toISOString(), stream, text: line.replace(/\x1b\[[0-9;]*m/g, '') }));
-      task.lines = task.lines.slice(-5000);
+      String(chunk).split(/\r?\n/).filter(Boolean).forEach(line => taskRecord.lines.push({ at: new Date().toISOString(), stream, text: line.replace(/\x1b\[[0-9;]*m/g, '') }));
+      taskRecord.lines = taskRecord.lines.slice(-5000);
     };
     child.stdout.on('data', chunk => append('stdout', chunk));
     child.stderr.on('data', chunk => append('stderr', chunk));
-    child.on('close', code => { task.status = code === 0 ? 'completed' : 'failed'; task.exitCode = code; task.finishedAt = new Date().toISOString(); });
-    child.on('error', error => { task.status = 'failed'; task.error = error.message; task.finishedAt = new Date().toISOString(); });
-    return task;
+    child.on('close', code => { taskRecord.status = code === 0 ? 'completed' : 'failed'; taskRecord.exitCode = code; taskRecord.finishedAt = new Date().toISOString(); });
+    child.on('error', error => { taskRecord.status = 'failed'; taskRecord.error = error.message; taskRecord.finishedAt = new Date().toISOString(); });
+    return taskRecord;
   };
 
   return http.createServer(async (req, res) => {
@@ -166,7 +184,7 @@ function createStudioServer(options) {
       if (req.method === 'GET' && url.pathname === '/api/file') {
         const file = core.resolveWorkspacePath(workspace, url.searchParams.get('path') || '');
         core.assertAccessible(workspace, file, config, 'studio-read');
-        return json(res, 200, { path: core.normalizeRelative(workspace, file), content: fs.readFileSync(file, 'utf8') });
+        return json(res, 200, { path: core.normalizeRelative(workspace, file), content: readStudioFile(file, config.maxFileBytes) });
       }
       if (req.method === 'POST' && url.pathname === '/api/tasks') return json(res, 202, startTask(await readJson(req)));
       if (req.method === 'POST' && url.pathname === '/api/undo') return json(res, 200, core.undoLatestRun(workspace));
@@ -202,4 +220,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(error => { console.error(`Ошибка: ${error.message}`); process.exitCode = 1; });
-module.exports = { parseArgs, createStudioServer, loadRuns, buildEntryDiff, assertLocalRequest };
+module.exports = { parseArgs, createStudioServer, loadRuns, buildEntryDiff, assertLocalRequest, readStudioFile };

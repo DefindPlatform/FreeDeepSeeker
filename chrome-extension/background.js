@@ -84,12 +84,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
       const auth = await collectAndStore(tab.id);
       sendResponse({ success: true, auth });
+    }).catch((error) => {
+      sendResponse({ success: false, error: error?.message || String(error) });
     });
     return true; // keep channel open for async
   }
 
   if (request.action === 'export') {
     chrome.storage.local.get(STORAGE_KEY, (result) => {
+      if (chrome.runtime.lastError) {
+        sendResponse({ success: false, error: chrome.runtime.lastError.message });
+        return;
+      }
       sendResponse({ success: true, auth: result[STORAGE_KEY] || {} });
     });
     return true;
