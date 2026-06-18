@@ -89,6 +89,11 @@ async function main(args = process.argv.slice(2)) {
   return ok ? 0 : 2;
 }
 if (require.main === module) {
-  main().then(code => process.exit(code)).catch(e => { console.error('[doctor] ERROR:', e.message); process.exit(1); });
+  main()
+    .then(code => { process.exitCode = code; })
+    .catch(e => {
+      console.error('[doctor] ERROR:', e.message);
+      process.exitCode = 1;
+    });
 }
 module.exports = { checkAuthFile, authPaths };

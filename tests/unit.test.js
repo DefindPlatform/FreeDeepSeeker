@@ -7,6 +7,11 @@ const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const serverInternals = require('../server.js').__test;
+const clientInternals = require('../client.js').__test;
+const agentInternals = require('../agent.js').__test;
+const agentCore = require('../lib/agent-core.js');
+const projectIndex = require('../lib/project-index.js');
+const studio = require('../studio-server.js');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'fdsapi-test-'));
@@ -99,6 +104,19 @@ test('doctor reports auth problems without requiring Chrome or network', () => {
   assert.match(res.stdout + res.stderr, /cookie missing/i);
 });
 
+test('doctor exits cleanly when offline auth checks pass', () => {
+  const dir = tmpdir();
+  const authPath = path.join(dir, 'valid-auth.json');
+  fs.writeFileSync(authPath, JSON.stringify({
+    token: 'tok_123',
+    cookie: 'sessionid=cookie_123',
+    wasmUrl: 'https://chat.deepseek.com/static/pow.wasm',
+  }));
+  const res = runNode(['scripts/doctor.js', '--offline'], { env: { DEEPSEEK_AUTH_PATH: authPath } });
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  assert.match(res.stdout, /auth file looks OK/i);
+});
+
 test('chrome auth prints actionable OS instructions when Chrome is missing', () => {
   const dir = tmpdir();
   const fakeChrome = path.join(dir, 'missing-chrome');
@@ -142,4 +160,211 @@ test('DeepSeek stream parser does not treat service content chunks as model erro
   assert.equal(serverInternals.isDeepSeekModelErrorEvent({ content: 'Official Reuters website URL' }), false);
   assert.equal(serverInternals.isDeepSeekModelErrorEvent({ finish_reason: 'stop' }), false);
   assert.equal(serverInternals.isDeepSeekModelErrorEvent({ type: 'error', content: 'backend error' }), true);
+});
+
+test('CLI parses model, system prompt, URL and non-stream mode', () => {
+  const args = clientInternals.parseArgs([
+    '--model=deepseek-reasoner',
+    '--system', 'Отвечай кратко',
+    '--url', 'http://localhost:9999/',
+    '--no-stream',
+    'Привет',
+  ]);
+  assert.equal(args.model, 'deepseek-reasoner');
+  assert.equal(args.system, 'Отвечай кратко');
+  assert.equal(args.url, 'http://localhost:9999');
+  assert.equal(args.stream, false);
+  assert.equal(args.prompt, 'Привет');
+  assert.equal(args.autoStart, true);
+});
+
+test('CLI prioritizes the main model choices and formats capabilities', () => {
+  const models = [
+    { id: 'deepseek-r1', capabilities: { reasoning: true } },
+    { id: 'deepseek-chat-search', capabilities: { web_search: true, files: true } },
+    { id: 'deepseek-chat', capabilities: { files: true } },
+  ];
+  const sorted = clientInternals.sortModels(models);
+  assert.deepEqual(sorted.map(model => model.id), ['deepseek-chat', 'deepseek-chat-search', 'deepseek-r1']);
+  assert.equal(clientInternals.capabilityBadges(models[1]), 'search, files');
+});
+
+test('CLI auto-start is limited to local API addresses', () => {
+  assert.equal(clientInternals.isLocalApi('http://localhost:9655'), true);
+  assert.equal(clientInternals.isLocalApi('http://127.0.0.1:9655'), true);
+  assert.equal(clientInternals.isLocalApi('https://api.example.com'), false);
+  assert.equal(clientInternals.parseArgs(['--no-auto-start']).autoStart, false);
+});
+
+test('coding agent confines paths to its workspace', () => {
+  const root = tmpdir();
+  const nested = path.join(root, 'src');
+  fs.mkdirSync(nested);
+  fs.writeFileSync(path.join(nested, 'app.js'), 'console.log("ok");');
+  assert.equal(agentInternals.resolveWorkspacePath(root, 'src/app.js'), path.join(nested, 'app.js'));
+  assert.throws(() => agentInternals.resolveWorkspacePath(root, '../outside.txt'), /выходит за рабочую папку/i);
+  assert.equal(agentInternals.isInside(root, nested), true);
+  assert.equal(agentInternals.isInside(root, path.dirname(root)), false);
+});
+
+test('coding agent parses workspace and autonomous mode', () => {
+  const args = agentInternals.parseArgs(['-C', '.', '--yes', '--max-steps=12', '-m', 'deepseek-reasoner', 'Исправь', 'тесты']);
+  assert.equal(args.workspace, ROOT);
+  assert.equal(args.yes, true);
+  assert.equal(args.maxSteps, 12);
+  assert.equal(args.model, 'deepseek-reasoner');
+  assert.equal(args.prompt, 'Исправь тесты');
+});
+
+test('coding agent parses project-map output flags', () => {
+  const args = agentInternals.parseArgs(['--project-map', '--json']);
+  assert.equal(args.projectMap, true);
+  assert.equal(args.json, true);
+});
+
+test('coding agent recognizes the user home directory as an unsafe default workspace', () => {
+  assert.equal(agentInternals.isHomeWorkspace(os.homedir()), true);
+  assert.equal(agentInternals.isHomeWorkspace(ROOT), false);
+  assert.equal(agentInternals.parseArgs(['--allow-home']).allowHome, true);
+});
+
+test('coding agent model menu accepts a number or keeps the current model', async () => {
+  const models = [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner', capabilities: { reasoning: true } }];
+  const selected = await agentInternals.selectModel({ question: async () => '2' }, models, 'deepseek-chat');
+  const unchanged = await agentInternals.selectModel({ question: async () => '' }, models, 'deepseek-chat');
+  assert.equal(selected, 'deepseek-reasoner');
+  assert.equal(unchanged, 'deepseek-chat');
+});
+
+test('coding agent protects secrets and rejects unsafe command paths', () => {
+  const root = tmpdir();
+  fs.writeFileSync(path.join(root, '.env'), 'TOKEN=secret');
+  const config = agentCore.loadProjectConfig(root);
+  assert.equal(agentCore.isProtectedPath(root, path.join(root, '.env')), true);
+  assert.throws(() => agentCore.assertAccessible(root, path.join(root, '.env'), config), /защищённый путь/i);
+  assert.throws(() => agentCore.validateCommand('powershell', [], root, config), /не разрешена/i);
+  assert.throws(() => agentCore.validateCommand('node', ['../outside.js'], root, config), /выходом из рабочей папки/i);
+  assert.equal(agentCore.validateCommand('npm', ['test'], root, config), 'npm');
+});
+
+test('repository config cannot silently elevate agent privileges', () => {
+  const root = tmpdir();
+  fs.writeFileSync(path.join(root, '.deepseek-agent.json'), JSON.stringify({
+    permissionMode: 'full',
+    allowProtectedPaths: true,
+    maxFileBytes: 999999999,
+  }));
+  const config = agentCore.loadProjectConfig(root);
+  assert.equal(config.permissionMode, 'ask');
+  assert.equal(config.allowProtectedPaths, false);
+  assert.equal(config.maxFileBytes, 10 * 1024 * 1024);
+});
+
+test('coding agent transaction can undo file creation and modification', () => {
+  const root = tmpdir();
+  const existing = path.join(root, 'existing.txt');
+  const created = path.join(root, 'created.txt');
+  fs.writeFileSync(existing, 'before');
+  const tx = new agentCore.RunTransaction(root, 'test transaction');
+  tx.before(existing);
+  agentCore.atomicWrite(existing, 'after');
+  tx.after(existing);
+  tx.before(created);
+  agentCore.atomicWrite(created, 'new');
+  tx.after(created);
+  tx.finish('completed');
+  const result = agentCore.undoLatestRun(root);
+  assert.equal(fs.readFileSync(existing, 'utf8'), 'before');
+  assert.equal(fs.existsSync(created), false);
+  assert.deepEqual(result.restored.sort(), ['created.txt', 'existing.txt']);
+});
+
+test('coding agent can recover mutations from a failed run', () => {
+  const root = tmpdir();
+  const file = path.join(root, 'partial.txt');
+  const tx = new agentCore.RunTransaction(root, 'failing task');
+  tx.before(file);
+  agentCore.atomicWrite(file, 'partial result');
+  tx.after(file);
+  tx.finish('failed', 'simulated failure');
+  const result = agentCore.undoLatestRun(root);
+  assert.equal(result.runId, tx.id);
+  assert.equal(fs.existsSync(file), false);
+});
+
+test('coding agent runs an allowed executable without a shell', async () => {
+  const root = tmpdir();
+  const result = await agentCore.runProgram(process.execPath, ['--version'], {
+    cwd: root,
+    timeoutMs: 5000,
+    maxOutputBytes: 10000,
+    env: agentCore.sanitizeEnvironment(),
+  });
+  assert.equal(result.exit_code, 0, result.stderr || result.error);
+  assert.match(result.stdout, /^v\d+/);
+});
+
+test('coding agent runs npm without a shell on Windows', async () => {
+  const result = await agentCore.runProgram('npm', ['--version'], {
+    cwd: ROOT,
+    timeoutMs: 10000,
+    maxOutputBytes: 10000,
+    env: agentCore.sanitizeEnvironment(),
+  });
+  assert.equal(result.exit_code, 0, result.stderr || result.error);
+  assert.match(result.stdout.trim(), /^\d+\.\d+/);
+});
+
+test('project index maps the full workspace while excluding secrets and dependencies', () => {
+  const root = tmpdir();
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.mkdirSync(path.join(root, 'tests'));
+  fs.mkdirSync(path.join(root, 'node_modules'));
+  fs.writeFileSync(path.join(root, 'src', 'app.js'), 'module.exports = 1;');
+  fs.writeFileSync(path.join(root, 'tests', 'app.test.js'), 'test("ok", () => {});');
+  fs.writeFileSync(path.join(root, 'node_modules', 'ignored.js'), 'ignored');
+  fs.writeFileSync(path.join(root, '.env'), 'TOKEN=secret');
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'indexed-project', scripts: { test: 'node --test' } }));
+  const index = projectIndex.createProjectIndex(root, agentCore.loadProjectConfig(root));
+  assert.deepEqual(index.files.map(file => file.path), ['package.json', 'src/app.js', 'tests/app.test.js']);
+  assert.equal(index.testFileCount, 1);
+  assert.equal(index.package.name, 'indexed-project');
+  assert.match(projectIndex.formatProjectContext(index), /src\/app\.js/);
+  assert.equal(projectIndex.projectMapPage(index, { query: 'tests' }).totalMatched, 1);
+});
+
+test('Studio parses a fixed workspace and validates its local port', () => {
+  const root = tmpdir();
+  const options = studio.parseArgs(['-C', root, '--port', '9777']);
+  assert.equal(options.workspace, path.resolve(root));
+  assert.equal(options.port, 9777);
+  assert.throws(() => studio.parseArgs(['--port', '80']), /Некорректный --port/);
+  assert.throws(() => studio.parseArgs(['--unknown']), /Неизвестный параметр/);
+});
+
+test('Studio rejects DNS rebinding and cross-site mutation requests', () => {
+  studio.assertLocalRequest({ method: 'GET', headers: { host: '127.0.0.1:9660' } }, 9660);
+  studio.assertLocalRequest({ method: 'POST', headers: { host: 'localhost:9660', origin: 'http://localhost:9660', 'sec-fetch-site': 'same-origin' } }, 9660);
+  assert.throws(() => studio.assertLocalRequest({ method: 'GET', headers: { host: 'attacker.test:9660' } }, 9660), /Host/);
+  assert.throws(() => studio.assertLocalRequest({ method: 'POST', headers: { host: '127.0.0.1:9660', origin: 'https:\/\/attacker.test' } }, 9660), /Origin/);
+  assert.throws(() => studio.assertLocalRequest({ method: 'POST', headers: { host: '127.0.0.1:9660', 'sec-fetch-site': 'cross-site' } }, 9660), /Cross-site/);
+});
+
+test('Studio builds a transaction diff without exposing full unchanged files', () => {
+  const root = tmpdir();
+  const file = path.join(root, 'sample.txt');
+  fs.writeFileSync(file, 'same\nbefore\ntail\n');
+  const tx = new agentCore.RunTransaction(root, 'diff test');
+  tx.before(file);
+  agentCore.atomicWrite(file, 'same\nafter\ntail\n');
+  tx.after(file);
+  tx.finish('completed');
+  const runs = studio.loadRuns(root);
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].diffs[0], {
+    path: 'sample.txt',
+    startLine: 2,
+    removed: ['before'],
+    added: ['after'],
+  });
 });

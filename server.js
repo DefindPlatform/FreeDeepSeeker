@@ -14,6 +14,7 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const readline = require('readline');
 const { spawnSync } = require('child_process');
 
@@ -32,7 +33,16 @@ const SERVER_PUBLIC_IP = (() => {
 
 const FORGETMEAI_WATERMARK = 't.me/forgetmeai';
 const PORT = Number(process.env.PORT || 9655);
-const HOST = process.env.HOST || '0.0.0.0';
+const HOST = process.env.HOST || '127.0.0.1';
+const API_KEY = process.env.FREEDEEPSEEK_API_KEY || '';
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '';
+const configuredMaxRequestBytes = Number(process.env.MAX_REQUEST_BYTES || 2 * 1024 * 1024);
+const MAX_REQUEST_BYTES = Number.isFinite(configuredMaxRequestBytes) && configuredMaxRequestBytes >= 1024
+    ? configuredMaxRequestBytes
+    : 2 * 1024 * 1024;
+const configuredRateLimit = Number(process.env.RATE_LIMIT_PER_MINUTE || 120);
+const RATE_LIMIT_PER_MINUTE = Number.isFinite(configuredRateLimit) && configuredRateLimit >= 0 ? configuredRateLimit : 120;
+const requestBuckets = new Map();
 function formatWatermark(prefix = 'ForgetMeAI') { return `${prefix}: ${FORGETMEAI_WATERMARK}`; }
 function printBanner() {
     console.log(`
@@ -1120,14 +1130,47 @@ function formatMessages(messages, tools) {
     return { prompt: conversation.trim(), systemPrompt: systemPrompt.trim() };
 }
 
+function isLoopbackHost(host) {
+    return ['127.0.0.1', 'localhost', '::1'].includes(String(host).toLowerCase());
+}
+
+function hasValidApiKey(req) {
+    if (!API_KEY) return true;
+    const header = String(req.headers.authorization || '');
+    const supplied = header.startsWith('Bearer ') ? header.slice(7) : '';
+    const expectedBuffer = Buffer.from(API_KEY);
+    const suppliedBuffer = Buffer.from(supplied);
+    return expectedBuffer.length === suppliedBuffer.length && crypto.timingSafeEqual(expectedBuffer, suppliedBuffer);
+}
+
+function consumeRateLimit(req) {
+    if (RATE_LIMIT_PER_MINUTE === 0) return { allowed: true, remaining: null };
+    const key = req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    let bucket = requestBuckets.get(key);
+    if (!bucket || now - bucket.startedAt >= 60000) bucket = { startedAt: now, count: 0 };
+    bucket.count++;
+    requestBuckets.set(key, bucket);
+    return { allowed: bucket.count <= RATE_LIMIT_PER_MINUTE, remaining: Math.max(0, RATE_LIMIT_PER_MINUTE - bucket.count) };
+}
+
 // === HTTP Server ===
 const server = http.createServer(async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (CORS_ORIGIN) {
+        res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
+        res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-agent-session');
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+    if (!hasValidApiKey(req)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { type: 'authentication_error', message: 'Invalid or missing API key' } }));
+        return;
+    }
 
     // Health check
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
@@ -1135,6 +1178,14 @@ const server = http.createServer(async (req, res) => {
         res.end(JSON.stringify({ status: 'ok', service: 'FreeDeepseekAPI', watermark: FORGETMEAI_WATERMARK, models: SUPPORTED_MODEL_IDS, unsupported_models: Object.keys(MODEL_CONFIGS).filter(id => !MODEL_CONFIGS[id].supported), agents: sessions.size, accounts: accounts.map(accountStatus), config_ready: hasAuthConfig(), session_reuse: { strategy: 'sticky per x-agent-session/user', ttl_minutes: Math.round(SESSION_TTL_MS / 60000), max_messages: MAX_MESSAGE_DEPTH, reset_all: 'POST /reset-session?agent=all' } }));
         return;
     }
+
+    const rate = consumeRateLimit(req);
+    if (!rate.allowed) {
+        res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '60' });
+        res.end(JSON.stringify({ error: { type: 'rate_limit_error', message: 'Local API rate limit exceeded' } }));
+        return;
+    }
+    if (rate.remaining !== null) res.setHeader('X-RateLimit-Remaining', String(rate.remaining));
 
     // Models: OpenAI-compatible list exposes only aliases verified to work through this proxy.
     if (req.method === 'GET' && url.pathname === '/v1/models') {
@@ -1204,8 +1255,21 @@ const server = http.createServer(async (req, res) => {
     }
 
     let body = '';
-    req.on('data', chunk => body += chunk);
+    let requestTooLarge = false;
+    let requestBytes = 0;
+    req.on('data', chunk => {
+        if (requestTooLarge) return;
+        requestBytes += chunk.length;
+        if (requestBytes > MAX_REQUEST_BYTES) {
+            requestTooLarge = true;
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { type: 'request_too_large', message: `Request body exceeds ${MAX_REQUEST_BYTES} bytes` } }));
+            return;
+        }
+        body += chunk;
+    });
     req.on('end', async () => {
+        if (requestTooLarge) return;
         try {
             const rawParams = JSON.parse(body || '{}');
             const params = normalizeApiParams(rawParams, apiMode);
@@ -1553,11 +1617,15 @@ async function showStartupMenu() {
 }
 
 async function main() {
+    if (!isLoopbackHost(HOST) && !API_KEY) {
+        throw new Error('Refusing non-loopback HOST without FREEDEEPSEEK_API_KEY');
+    }
     printBanner();
     const shouldStart = await showStartupMenu();
     if (!shouldStart) process.exit(0);
     server.listen(PORT, HOST, () => {
         console.log(`[DS-API] Server on http://${HOST}:${PORT} (multi-agent sessions enabled)`);
+        console.log(`[DS-API] Access: ${API_KEY ? 'Bearer API key required' : 'loopback-only, no API key'}`);
         console.log(`[DS-API] ${formatWatermark()}`);
         console.log('[DS-API] POST /v1/chat/completions (OpenAI Chat Completions, stream=true|false)');
         console.log('[DS-API] POST /v1/messages — Anthropic Messages shim for Claude Code');
@@ -1570,8 +1638,23 @@ async function main() {
     });
 }
 
+function shutdown(signal) {
+    console.log(`[DS-API] ${signal}: closing server`);
+    server.close(error => {
+        if (error) {
+            console.error('[DS-API] shutdown error:', error.message);
+            process.exitCode = 1;
+        }
+    });
+}
+
 if (require.main === module) {
-    main().catch(err => { console.error('[DS-API] FATAL:', err); process.exit(1); });
+    process.once('SIGINT', () => shutdown('SIGINT'));
+    process.once('SIGTERM', () => shutdown('SIGTERM'));
+    main().catch(err => {
+        console.error('[DS-API] FATAL:', err);
+        process.exitCode = 1;
+    });
 }
 
 module.exports = {

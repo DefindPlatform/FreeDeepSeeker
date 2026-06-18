@@ -1,4 +1,5 @@
 node_modules/
+dashboard/dist/
 .env
 *.log
 auth.json
@@ -9,4 +10,5 @@ deepseek-auth.json
 *.session.json
 /tmp/deepseek_response_*
 .DS_Store
+.deepseek-agent/
 *.pdf
