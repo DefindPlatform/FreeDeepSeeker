@@ -12,6 +12,7 @@ FreeDeepseekAPI is a local-first Node.js application with four user-facing entry
 The proxy process delegates stable infrastructure concerns to focused modules:
 
 - `lib/server-config.js` validates environment configuration before the server starts.
+- `lib/logger.js` emits redacted text or JSON logs and propagates `X-Request-Id` across proxy and Studio requests.
 - `lib/http-guard.js` owns CORS headers, constant-time API-key comparison and local rate limiting.
 - `lib/session-store.js` owns per-agent session creation, bounded recovery history, listing and reset behavior.
 - `lib/api-routes.js` owns health, model metadata and session-control routes.

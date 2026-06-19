@@ -20,6 +20,7 @@ const { loadServerConfig } = require('./lib/server-config.js');
 const { createSessionStore } = require('./lib/session-store.js');
 const { createHttpGuard } = require('./lib/http-guard.js');
 const { handleHealthRoute, handleControlRoutes } = require('./lib/api-routes.js');
+const { createLogger, attachRequestLog } = require('./lib/logger.js');
 
 const SERVER_HOST = os.hostname();  // Dynamic hostname detection
 const SERVER_PUBLIC_IP = (() => {
@@ -38,6 +39,7 @@ const FORGETMEAI_WATERMARK = 't.me/forgetmeai';
 const SERVER_CONFIG = loadServerConfig();
 const { host: HOST, port: PORT, apiKey: API_KEY, corsOrigin: CORS_ORIGIN, maxRequestBytes: MAX_REQUEST_BYTES, rateLimitPerMinute: RATE_LIMIT_PER_MINUTE } = SERVER_CONFIG;
 const httpGuard = createHttpGuard({ apiKey: API_KEY, corsOrigin: CORS_ORIGIN, rateLimitPerMinute: RATE_LIMIT_PER_MINUTE });
+const logger = createLogger({ service: 'freedeepseek-api' });
 function formatWatermark(prefix = 'ForgetMeAI') { return `${prefix}: ${FORGETMEAI_WATERMARK}`; }
 function printBanner() {
     console.log(`
@@ -1129,6 +1131,7 @@ const routeContext = {
     maxMessageDepth: MAX_MESSAGE_DEPTH,
 };
 const server = http.createServer(async (req, res) => {
+    attachRequestLog(req, res, logger);
     if (httpGuard.applyCors(req, res)) return;
 
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);

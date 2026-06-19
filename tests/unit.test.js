@@ -15,6 +15,8 @@ const studio = require('../studio-server.js');
 const { loadServerConfig } = require('../lib/server-config.js');
 const { createSessionStore } = require('../lib/session-store.js');
 const { createHttpGuard } = require('../lib/http-guard.js');
+const { createLogger, redact, attachRequestLog } = require('../lib/logger.js');
+const { EventEmitter } = require('node:events');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'fdsapi-test-'));
@@ -36,6 +38,34 @@ test('server configuration validates ports, limits and exact CORS origins', () =
   assert.throws(() => loadServerConfig({ PORT: '80' }, ROOT), /PORT/);
   assert.throws(() => loadServerConfig({ MAX_REQUEST_BYTES: 'abc' }, ROOT), /MAX_REQUEST_BYTES/);
   assert.throws(() => loadServerConfig({ CORS_ORIGIN: '*' }, ROOT), /CORS_ORIGIN/);
+});
+
+test('structured logger redacts secrets and respects levels', () => {
+  let output = '';
+  const logger = createLogger({ service: 'test', level: 'info', format: 'json', stream: { write: chunk => { output += chunk; } }, now: () => new Date('2026-01-01T00:00:00.000Z') });
+  logger.debug('hidden', { value: 1 });
+  logger.info('visible', { token: 'raw-token', nested: { authorization: 'Bearer abc.def', note: 'token=abc' } });
+  const record = JSON.parse(output);
+  assert.equal(record.event, 'visible');
+  assert.equal(record.token, '[REDACTED]');
+  assert.equal(record.nested.authorization, '[REDACTED]');
+  assert.equal(record.nested.note, 'token=[REDACTED]');
+  assert.equal(redact({ cookie: 'sessionid=secret' }).cookie, '[REDACTED]');
+});
+
+test('request logging propagates a safe correlation id', () => {
+  const req = { method: 'GET', url: '/health?secret=yes', headers: { 'x-request-id': 'test-123' }, socket: { remoteAddress: '127.0.0.1' } };
+  const res = new EventEmitter();
+  res.statusCode = 204;
+  res.headers = {};
+  res.setHeader = (name, value) => { res.headers[name] = value; };
+  const events = [];
+  const requestId = attachRequestLog(req, res, { info: (event, fields) => events.push({ event, fields }) }, { clock: () => 10 });
+  res.emit('finish');
+  assert.equal(requestId, 'test-123');
+  assert.equal(res.headers['X-Request-Id'], 'test-123');
+  assert.equal(events[0].fields.path, '/health');
+  assert.equal(events[0].fields.durationMs, 0);
 });
 
 test('session store bounds history and resets one or all sessions', () => {

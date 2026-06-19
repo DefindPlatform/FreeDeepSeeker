@@ -5,6 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const core = require('./lib/agent-core.js');
 const projectIndex = require('./lib/project-index.js');
+const { createLogger, attachRequestLog } = require('./lib/logger.js');
 
 function parseArgs(argv) {
   const options = { workspace: process.cwd(), port: 9660 };
@@ -131,6 +132,7 @@ function createStudioServer(options) {
   const apiBaseUrl = String(process.env.DEEPSEEK_API_URL || 'http://127.0.0.1:9655').replace(/\/+$/, '');
   const apiHeaders = process.env.FREEDEEPSEEK_API_KEY ? { Authorization: `Bearer ${process.env.FREEDEEPSEEK_API_KEY}` } : {};
   const sessionId = core.workspaceSessionId(workspace);
+  const logger = options.logger || createLogger({ service: 'deepseek-agent-studio' });
   let task = null;
   let activeChild = null;
   const eventClients = new Set();
@@ -208,6 +210,7 @@ function createStudioServer(options) {
   };
 
   return http.createServer(async (req, res) => {
+    attachRequestLog(req, res, logger);
     try {
       setSecurityHeaders(res);
       assertLocalRequest(req, options.port);
