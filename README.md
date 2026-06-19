@@ -9,7 +9,7 @@ FreeDeepseekAPI — локальный OpenAI-/Anthropic-совместимый 
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/DefindPlatform/freedeepseekapi.git
+git clone https://github.com/DefindPlatform/FreeDeepSeeker.git
 cd freedeepseekapi
 npm install
 npm run auth

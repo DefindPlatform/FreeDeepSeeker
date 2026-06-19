@@ -58,7 +58,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/DefindPlatform/freedeepseekapi.git"
+    "url": "https://github.com/DefindPlatform/FreeDeepSeeker.git"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
