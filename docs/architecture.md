@@ -28,3 +28,5 @@ The proxy process delegates stable infrastructure concerns to focused modules:
 ## Validation
 
 `npm run check` is the release gate: lint, unit/integration tests, documentation contracts, Studio production build and dependency audits. HTTP integration tests start real proxy processes with temporary fake auth and never contact DeepSeek.
+
+Pushing a semantic tag matching `package.json` (for example `v0.1.0`) runs the same gate, builds the npm tarball, standalone Studio and Chrome-extension archives, writes SHA-256 checksums and publishes a GitHub Release. Run `npm run release:check -- v0.1.0` before tagging.

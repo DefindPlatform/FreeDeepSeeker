@@ -1,0 +1,12 @@
+# Changelog
+
+All notable changes are documented here. Versions follow Semantic Versioning.
+
+## 0.1.0
+
+- OpenAI Chat Completions, Responses API and Anthropic Messages compatibility.
+- Persistent per-project coding-agent conversations, transactional edits and undo.
+- Local Agent Studio with model and permission controls, task streaming and cancellation.
+- Multi-account auth rotation, request limits and strict local-access defaults.
+- Optional resource-limited Docker command sandbox.
+- Cross-platform CI, browser regression tests and redacted structured request logs.
