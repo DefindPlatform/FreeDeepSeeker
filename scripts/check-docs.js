@@ -5,7 +5,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const docFiles = [
   'README.md', 'SECURITY.md', 'CONTRIBUTING.md', '.env.example',
-  'docs/api-documentation.md', 'docs/coding-agent.md', 'docs/studio.md', 'docs/browser-auth.md',
+  'docs/api-documentation.md', 'docs/architecture.md', 'docs/coding-agent.md', 'docs/studio.md', 'docs/browser-auth.md',
 ];
 const docs = Object.fromEntries(docFiles.map(file => [file, fs.readFileSync(path.join(ROOT, file), 'utf8')]));
 const allDocs = Object.values(docs).join('\n');
@@ -25,7 +25,7 @@ const platformEnvironment = new Set(['HOME', 'USERPROFILE']);
 const documentedEnvNames = new Set(envNames.filter(name => !platformEnvironment.has(name)));
 for (const name of documentedEnvNames) requireText(allDocs, name, `environment variable ${name}`);
 
-const publicApi = source('server.js');
+const publicApi = `${source('server.js')}\n${source('lib/api-routes.js')}`;
 for (const route of [
   '/health', '/v1/models', '/v1/model-capabilities', '/api/model-capabilities', '/v1/sessions',
   '/reset-session', '/v1/chat/completions', '/v1/messages', '/v1/responses',

@@ -270,6 +270,7 @@ Proxy поддерживает reasoning и web search для моделей, к
 Дополнительная документация находится в папке `docs/`:
 
 - `docs/api-documentation.md`
+- `docs/architecture.md`
 - `docs/coding-agent.md`
 - `docs/studio.md`
 - `docs/browser-auth.md`

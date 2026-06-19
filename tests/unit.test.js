@@ -13,6 +13,8 @@ const agentCore = require('../lib/agent-core.js');
 const projectIndex = require('../lib/project-index.js');
 const studio = require('../studio-server.js');
 const { loadServerConfig } = require('../lib/server-config.js');
+const { createSessionStore } = require('../lib/session-store.js');
+const { createHttpGuard } = require('../lib/http-guard.js');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'fdsapi-test-'));
@@ -34,6 +36,29 @@ test('server configuration validates ports, limits and exact CORS origins', () =
   assert.throws(() => loadServerConfig({ PORT: '80' }, ROOT), /PORT/);
   assert.throws(() => loadServerConfig({ MAX_REQUEST_BYTES: 'abc' }, ROOT), /MAX_REQUEST_BYTES/);
   assert.throws(() => loadServerConfig({ CORS_ORIGIN: '*' }, ROOT), /CORS_ORIGIN/);
+});
+
+test('session store bounds history and resets one or all sessions', () => {
+  const store = createSessionStore({ maxHistoryLength: 2, maxHistoryChars: 1000 });
+  store.store('agent-a', 'one', 'answer');
+  store.store('agent-a', 'two', 'answer');
+  store.store('agent-a', 'three', 'answer');
+  assert.equal(store.get('agent-a').history.length, 2);
+  assert.equal(store.list()[0].agent, 'agent-a');
+  assert.equal(store.reset('agent-a', false).historyCount, 2);
+  assert.equal(store.get('agent-a').history.length, 2);
+  assert.equal(store.reset('all').count, 1);
+  assert.equal(store.sessions.size, 0);
+});
+
+test('HTTP guard performs constant-time API auth and per-address limits', () => {
+  const guard = createHttpGuard({ apiKey: 'test-key', rateLimitPerMinute: 2 });
+  const request = { headers: { authorization: 'Bearer test-key' }, socket: { remoteAddress: '127.0.0.1' }, method: 'GET' };
+  assert.equal(guard.hasValidApiKey(request), true);
+  assert.equal(guard.hasValidApiKey({ ...request, headers: {} }), false);
+  assert.equal(guard.consumeRateLimit(request).allowed, true);
+  assert.equal(guard.consumeRateLimit(request).allowed, true);
+  assert.equal(guard.consumeRateLimit(request).allowed, false);
 });
 
 test('auth import copies valid deepseek-auth.json and chmods it to 0600', () => {

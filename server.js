@@ -14,10 +14,12 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
 const readline = require('readline');
 const { spawnSync } = require('child_process');
 const { loadServerConfig } = require('./lib/server-config.js');
+const { createSessionStore } = require('./lib/session-store.js');
+const { createHttpGuard } = require('./lib/http-guard.js');
+const { handleHealthRoute, handleControlRoutes } = require('./lib/api-routes.js');
 
 const SERVER_HOST = os.hostname();  // Dynamic hostname detection
 const SERVER_PUBLIC_IP = (() => {
@@ -35,7 +37,7 @@ const SERVER_PUBLIC_IP = (() => {
 const FORGETMEAI_WATERMARK = 't.me/forgetmeai';
 const SERVER_CONFIG = loadServerConfig();
 const { host: HOST, port: PORT, apiKey: API_KEY, corsOrigin: CORS_ORIGIN, maxRequestBytes: MAX_REQUEST_BYTES, rateLimitPerMinute: RATE_LIMIT_PER_MINUTE } = SERVER_CONFIG;
-const requestBuckets = new Map();
+const httpGuard = createHttpGuard({ apiKey: API_KEY, corsOrigin: CORS_ORIGIN, rateLimitPerMinute: RATE_LIMIT_PER_MINUTE });
 function formatWatermark(prefix = 'ForgetMeAI') { return `${prefix}: ${FORGETMEAI_WATERMARK}`; }
 function printBanner() {
     console.log(`
@@ -56,11 +58,13 @@ function prompt(question) {
 function isTruthy(value) { return typeof value === 'string' && ['1','true','yes','on'].includes(value.trim().toLowerCase()); }
 
 // === Per-Agent Session Store ===
-const sessions = new Map();  // keyed by agent ID (from `user` field)
 const MAX_HISTORY_LENGTH = 15;
 const MAX_HISTORY_CHARS = 10000;
 const MAX_MESSAGE_DEPTH = 100;  // auto-reset after this many messages
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000;  // 2 hours
+const sessionStore = createSessionStore({ maxHistoryLength: MAX_HISTORY_LENGTH, maxHistoryChars: MAX_HISTORY_CHARS });
+const sessions = sessionStore.sessions;
+const getOrCreateAgentSession = sessionStore.get;
 
 // === DeepSeek Web API Config — loaded from external config file ===
 const DS_CONFIG_PATH = SERVER_CONFIG.authPath;
@@ -205,24 +209,6 @@ async function readDeepSeekJsonResponse(resp, label, account) {
 }
 if (require.main === module) {
     loadDeepSeekConfig({ fatal: false });
-}
-
-function createSession() {
-    return {
-        id: null,
-        parentMessageId: null,
-        createdAt: null,
-        messageCount: 0,
-        accountId: null,
-        history: [],
-    };
-}
-
-function getOrCreateAgentSession(agentId) {
-    if (!sessions.has(agentId)) {
-        sessions.set(agentId, createSession());
-    }
-    return sessions.get(agentId);
 }
 
 async function solvePOW(challenge, config = DS_CONFIG) {
@@ -1039,19 +1025,10 @@ function sendOpenAIStream(res, openaiResp) {
 }
 
 function storeHistory(agentId, prompt, content, toolCall) {
-    const session = getOrCreateAgentSession(agentId);
     const assistantResponse = toolCall
         ? `TOOL_CALL: ${toolCall.name}\narguments: ${toolCall.arguments}`
         : content;
-    // Save last 500 chars of the prompt for history context
-    const shortPrompt = prompt.length > 500 ? '...' + prompt.substring(prompt.length - 500) : prompt;
-    session.history.push({ user: shortPrompt, assistant: assistantResponse });
-    while (session.history.length > MAX_HISTORY_LENGTH) session.history.shift();
-    let historyChars = session.history.reduce((sum, e) => sum + e.user.length + e.assistant.length, 0);
-    while (historyChars > MAX_HISTORY_CHARS && session.history.length > 1) {
-        const removed = session.history.shift();
-        historyChars -= removed.user.length + removed.assistant.length;
-    }
+    sessionStore.store(agentId, prompt, assistantResponse);
 }
 
 // Extract MEDIA: paths from tool results that contain screenshot paths
@@ -1137,52 +1114,34 @@ function isLoopbackHost(host) {
     return ['127.0.0.1', 'localhost', '::1'].includes(String(host).toLowerCase());
 }
 
-function hasValidApiKey(req) {
-    if (!API_KEY) return true;
-    const header = String(req.headers.authorization || '');
-    const supplied = header.startsWith('Bearer ') ? header.slice(7) : '';
-    const expectedBuffer = Buffer.from(API_KEY);
-    const suppliedBuffer = Buffer.from(supplied);
-    return expectedBuffer.length === suppliedBuffer.length && crypto.timingSafeEqual(expectedBuffer, suppliedBuffer);
-}
-
-function consumeRateLimit(req) {
-    if (RATE_LIMIT_PER_MINUTE === 0) return { allowed: true, remaining: null };
-    const key = req.socket.remoteAddress || 'unknown';
-    const now = Date.now();
-    let bucket = requestBuckets.get(key);
-    if (!bucket || now - bucket.startedAt >= 60000) bucket = { startedAt: now, count: 0 };
-    bucket.count++;
-    requestBuckets.set(key, bucket);
-    return { allowed: bucket.count <= RATE_LIMIT_PER_MINUTE, remaining: Math.max(0, RATE_LIMIT_PER_MINUTE - bucket.count) };
-}
-
 // === HTTP Server ===
+const routeContext = {
+    watermark: FORGETMEAI_WATERMARK,
+    modelConfigs: MODEL_CONFIGS,
+    supportedModelIds: SUPPORTED_MODEL_IDS,
+    allModelCapabilities: ALL_MODEL_CAPABILITIES,
+    sessions,
+    sessionStore,
+    accounts,
+    accountStatus,
+    hasAuthConfig,
+    sessionTtlMs: SESSION_TTL_MS,
+    maxMessageDepth: MAX_MESSAGE_DEPTH,
+};
 const server = http.createServer(async (req, res) => {
-    if (CORS_ORIGIN) {
-        res.setHeader('Access-Control-Allow-Origin', CORS_ORIGIN);
-        res.setHeader('Vary', 'Origin');
-    }
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-agent-session');
-    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+    if (httpGuard.applyCors(req, res)) return;
 
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
-    if (!hasValidApiKey(req)) {
+    if (!httpGuard.hasValidApiKey(req)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { type: 'authentication_error', message: 'Invalid or missing API key' } }));
         return;
     }
 
-    // Health check
-    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/health')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', service: 'FreeDeepseekAPI', watermark: FORGETMEAI_WATERMARK, models: SUPPORTED_MODEL_IDS, unsupported_models: Object.keys(MODEL_CONFIGS).filter(id => !MODEL_CONFIGS[id].supported), agents: sessions.size, accounts: accounts.map(accountStatus), config_ready: hasAuthConfig(), session_reuse: { strategy: 'sticky per x-agent-session/user', ttl_minutes: Math.round(SESSION_TTL_MS / 60000), max_messages: MAX_MESSAGE_DEPTH, reset_all: 'POST /reset-session?agent=all' } }));
-        return;
-    }
+    if (handleHealthRoute(req, res, url, routeContext)) return;
 
-    const rate = consumeRateLimit(req);
+    const rate = httpGuard.consumeRateLimit(req);
     if (!rate.allowed) {
         res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '60' });
         res.end(JSON.stringify({ error: { type: 'rate_limit_error', message: 'Local API rate limit exceeded' } }));
@@ -1190,66 +1149,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (rate.remaining !== null) res.setHeader('X-RateLimit-Remaining', String(rate.remaining));
 
-    // Models: OpenAI-compatible list exposes only aliases verified to work through this proxy.
-    if (req.method === 'GET' && url.pathname === '/v1/models') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ object: 'list', data: SUPPORTED_MODEL_IDS.map(id => ({ id, object: 'model', created: 1700000000, owned_by: 'deepseek-web', real_model: MODEL_CONFIGS[id].real_model, capabilities: MODEL_CONFIGS[id].capabilities })) }));
-        return;
-    }
-
-    // Full mapping, including Web models observed but not currently usable through the direct API.
-    if (req.method === 'GET' && (url.pathname === '/v1/model-capabilities' || url.pathname === '/api/model-capabilities')) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ object: 'model_capabilities', watermark: FORGETMEAI_WATERMARK, data: ALL_MODEL_CAPABILITIES }));
-        return;
-    }
-
-    // Sessions status
-    if (req.method === 'GET' && url.pathname === '/v1/sessions') {
-        const agentList = [];
-        for (const [agentId, session] of sessions) {
-            agentList.push({
-                agent: agentId,
-                session_id: session.id,
-                message_count: session.messageCount,
-                account: session.accountId,
-                history_size: session.history.length,
-                age_min: session.createdAt ? Math.round((Date.now() - session.createdAt) / 60000) : 0,
-            });
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ agents: agentList, total: agentList.length }));
-        return;
-    }
-
-    // Reset session for a specific agent (or all if no agent specified)
-    if (req.method === 'POST' && url.pathname === '/reset-session') {
-        const agentId = url.searchParams.get('agent') || 'default';
-        if (agentId === 'all') {
-            const count = sessions.size;
-            sessions.clear();
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ status: 'all_sessions_cleared', count }));
-            return;
-        }
-        const session = sessions.get(agentId);
-        if (!session) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: `No session for agent: ${agentId}` }));
-            return;
-        }
-        const historyCount = session.history.length;
-        const historyPreview = session.history.map(e => e.user.substring(0, 40)).join(' | ');
-        const clearHistory = ['1', 'true', 'yes'].includes(String(url.searchParams.get('clear_history') || '').toLowerCase());
-        session.id = null;
-        session.parentMessageId = null;
-        session.createdAt = null;
-        session.messageCount = 0;
-        if (clearHistory) session.history = [];
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'session_reset', agent: agentId, history_preserved: clearHistory ? 0 : historyCount, history: clearHistory ? '' : historyPreview }));
-        return;
-    }
+    if (handleControlRoutes(req, res, url, routeContext)) return;
 
     const apiMode = url.pathname === '/v1/messages'
         ? 'anthropic'
