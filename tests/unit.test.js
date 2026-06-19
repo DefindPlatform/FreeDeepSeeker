@@ -339,6 +339,38 @@ test('coding agent strips common secret environment variables', () => {
   assert.equal(env.ORDINARY_VALUE, 'not-forwarded');
 });
 
+test('coding agent builds a resource-limited networkless Docker invocation', () => {
+  const root = tmpdir();
+  const invocation = agentCore.buildCommandInvocation('npm', ['test'], {
+    cwd: root,
+    sandbox: 'docker',
+    dockerImage: 'node:22-alpine',
+    sandboxMemoryMb: 384,
+    sandboxCpu: 0.5,
+    sandboxNetwork: false,
+  });
+  assert.equal(invocation.executable, 'docker');
+  assert.deepEqual(invocation.args.slice(0, 13), [
+    'run', '--rm', '--init', '--network', 'none', '--cpus', '0.5', '--memory', '384m',
+    '--pids-limit', '128', '--cap-drop', 'ALL',
+  ]);
+  assert.ok(invocation.args.includes('no-new-privileges'));
+  assert.deepEqual(invocation.args.slice(-3), ['node:22-alpine', 'npm', 'test']);
+});
+
+test('coding agent validates sandbox configuration bounds', () => {
+  const root = tmpdir();
+  fs.writeFileSync(path.join(root, '.deepseek-agent.json'), JSON.stringify({
+    commandSandbox: 'docker', dockerImage: 'node:22-alpine', sandboxMemoryMb: 16, sandboxCpu: 100,
+  }));
+  const config = agentCore.loadProjectConfig(root);
+  assert.equal(config.commandSandbox, 'docker');
+  assert.equal(config.sandboxMemoryMb, 128);
+  assert.equal(config.sandboxCpu, 8);
+  fs.writeFileSync(path.join(root, '.deepseek-agent.json'), JSON.stringify({ commandSandbox: 'unknown' }));
+  assert.throws(() => agentCore.loadProjectConfig(root), /commandSandbox/);
+});
+
 test('coding agent transaction can undo file creation and modification', () => {
   const root = tmpdir();
   const existing = path.join(root, 'existing.txt');

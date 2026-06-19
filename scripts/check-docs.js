@@ -44,7 +44,7 @@ for (const option of ['--login', '--no-stream', '--project-map', '--max-steps', 
   requireText(allDocs, option, `documented option ${option}`);
 }
 
-for (const key of ['permissionMode', 'protectedPaths', 'allowedPrograms', 'maxFileBytes', 'maxCommandOutputBytes', 'commandTimeoutMs', 'rollbackOnFailure', 'historyEnabled', 'historyTtlDays', 'maxConversationExchanges', 'maxConversationChars']) {
+for (const key of ['permissionMode', 'protectedPaths', 'allowedPrograms', 'maxFileBytes', 'maxCommandOutputBytes', 'commandTimeoutMs', 'commandSandbox', 'dockerImage', 'sandboxMemoryMb', 'sandboxCpu', 'sandboxNetwork', 'rollbackOnFailure', 'historyEnabled', 'historyTtlDays', 'maxConversationExchanges', 'maxConversationChars']) {
   requireText(source('lib/agent-core.js'), key, `implemented agent config ${key}`);
   requireText(docs['docs/coding-agent.md'], key, `documented agent config ${key}`);
 }

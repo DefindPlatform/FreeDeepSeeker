@@ -346,7 +346,16 @@ async function executeTool(name, args, context) {
     if (!await authorizeMutation(context, `Выполнить: ${program} ${commandArgs.join(' ')}?`)) return { ok: false, denied: true, mode: config.permissionMode };
     const timeoutMs = Math.min(Math.max(Number(args.timeout_ms || config.commandTimeoutMs), 1000), 120000);
     transaction.audit('command_started', { program, args: commandArgs, timeoutMs });
-    const result = await core.runProgram(program, commandArgs, { cwd: root, timeoutMs, maxOutputBytes: config.maxCommandOutputBytes });
+    const result = await core.runProgram(program, commandArgs, {
+      cwd: root,
+      timeoutMs,
+      maxOutputBytes: config.maxCommandOutputBytes,
+      sandbox: config.commandSandbox,
+      dockerImage: config.dockerImage,
+      sandboxMemoryMb: config.sandboxMemoryMb,
+      sandboxCpu: config.sandboxCpu,
+      sandboxNetwork: config.sandboxNetwork,
+    });
     transaction.audit('command_finished', { program, exitCode: result.exit_code, timedOut: result.timed_out });
     return result;
   }
@@ -560,6 +569,11 @@ async function main(argv = process.argv.slice(2)) {
       maxFileBytes: 1000000,
       maxCommandOutputBytes: 100000,
       commandTimeoutMs: 30000,
+      commandSandbox: 'process',
+      dockerImage: 'node:22-alpine',
+      sandboxMemoryMb: 512,
+      sandboxCpu: 1,
+      sandboxNetwork: false,
       rollbackOnFailure: true,
       historyEnabled: true,
       historyTtlDays: 30,

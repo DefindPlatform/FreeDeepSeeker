@@ -41,6 +41,11 @@ Create a starter file with `deepseek-agent --init`. Supported keys:
   "maxFileBytes": 1000000,
   "maxCommandOutputBytes": 100000,
   "commandTimeoutMs": 30000,
+  "commandSandbox": "process",
+  "dockerImage": "node:22-alpine",
+  "sandboxMemoryMb": 512,
+  "sandboxCpu": 1,
+  "sandboxNetwork": false,
   "rollbackOnFailure": true,
   "historyEnabled": true,
   "historyTtlDays": 30,
@@ -77,9 +82,9 @@ All paths remain workspace-relative and protected paths are rejected for reads a
 
 The agent does not invoke a command string through PowerShell, `cmd.exe`, or `/bin/sh`. The model supplies a `program` and an argument array, which are passed to `spawn` with `shell: false`.
 
-Programs must be listed in `allowedPrograms`. Arguments containing traversal or absolute paths outside the workspace are rejected. Git is restricted to read-only subcommands. Sensitive environment variables are removed before child-process launch.
+Programs must be listed in `allowedPrograms`. Arguments containing traversal or absolute paths outside the workspace are rejected. Git is restricted to read-only subcommands. Sensitive environment variables are removed before child-process launch. Timeouts terminate the complete spawned process tree instead of leaving grandchildren running.
 
-This is process hardening, not a kernel sandbox. An allowed executable or project test script can still contain arbitrary code. Use containers or a dedicated low-privilege account for untrusted repositories.
+`commandSandbox: "process"` is the compatible default and is process hardening, not a kernel sandbox. For untrusted project commands, install Docker and select `commandSandbox: "docker"`. Docker runs the chosen program with no capabilities, `no-new-privileges`, no network by default, 128-process limit, configurable CPU/memory limits and only the workspace mounted at `/workspace`. Select an image that contains the required toolchain; enabling `sandboxNetwork` should be an explicit exception. Docker isolation does not protect files inside the mounted workspace, so transaction review and a clean Git worktree remain important.
 
 ## Recovery and audit
 
