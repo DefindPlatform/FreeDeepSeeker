@@ -148,6 +148,7 @@ test('doctor exits cleanly when offline auth checks pass', () => {
     cookie: 'sessionid=cookie_123',
     wasmUrl: 'https://chat.deepseek.com/static/pow.wasm',
   }));
+  if (process.platform !== 'win32') fs.chmodSync(authPath, 0o600);
   const res = runNode(['scripts/doctor.js', '--offline'], { env: { DEEPSEEK_AUTH_PATH: authPath } });
   assert.equal(res.status, 0, res.stderr || res.stdout);
   assert.match(res.stdout, /auth file looks OK/i);
