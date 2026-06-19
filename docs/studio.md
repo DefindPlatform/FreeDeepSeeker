@@ -10,6 +10,8 @@ npm run studio -- -C C:\path\to\project --port 9660
 
 The production dashboard is committed under `dashboard/dist/`. Rebuild it after UI changes with `npm run studio:build` (Node.js 20.19+). Studio binds only to `127.0.0.1`.
 
+Run the browser regression suite with `npm run studio:e2e`. It starts an isolated Studio instance on port `9662` and verifies the model picker, permission modes, project filtering, task cancellation and conversation reset.
+
 `DEEPSEEK_API_URL` selects the proxy (default `http://127.0.0.1:9655`). If the proxy uses `FREEDEEPSEEK_API_KEY`, give Studio the same environment variable.
 
 ## Conversation context

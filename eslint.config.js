@@ -24,6 +24,10 @@ module.exports = [
     rules: { 'react/jsx-uses-vars': 'error' },
   },
   {
+    files: ['dashboard/playwright.config.js', 'dashboard/e2e/**/*.js'],
+    languageOptions: { ecmaVersion: 2022, sourceType: 'module', globals: { ...globals.node, ...globals.browser, ...globals.es2021 } },
+  },
+  {
     files: ['chrome-extension/**/*.js'],
     languageOptions: { ecmaVersion: 2022, sourceType: 'script', globals: { ...globals.browser, ...globals.webextensions, chrome: 'readonly' } },
   },
