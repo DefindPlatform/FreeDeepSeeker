@@ -12,6 +12,7 @@ const agentInternals = require('../agent.js').__test;
 const agentCore = require('../lib/agent-core.js');
 const { ToolRegistry, createCodingToolRegistry } = require('../lib/tool-registry.js');
 const { AgentRunController, toolSignature } = require('../lib/agent-runtime.js');
+const projectMemory = require('../lib/project-memory.js');
 const projectIndex = require('../lib/project-index.js');
 const studio = require('../studio-server.js');
 const { loadServerConfig } = require('../lib/server-config.js');
@@ -347,12 +348,63 @@ test('coding agent parses runtime budgets, dry-run and report output', () => {
 
 test('tool registry exposes provider schemas and permission kinds', () => {
   const registry = createCodingToolRegistry();
-  assert.equal(registry.names().length, 8);
+  assert.equal(registry.names().length, 11);
   assert.equal(registry.kind('read_file'), 'read');
   assert.equal(registry.kind('write_file'), 'write');
   assert.equal(registry.kind('run_command'), 'command');
   assert.equal(registry.schemas()[0].kind, undefined);
   assert.throws(() => new ToolRegistry([{ kind: 'magic', type: 'function', function: { name: 'bad', parameters: { type: 'object' } } }]), /unknown|неизвестный/i);
+});
+
+test('project memory persists typed durable context and updates keys', () => {
+  const root = tmpdir();
+  projectMemory.rememberProjectMemory(root, { key: 'api-style', value: 'Keep OpenAI compatibility', type: 'constraint' });
+  projectMemory.rememberProjectMemory(root, { key: 'api-style', value: 'Keep OpenAI and Anthropic compatibility', type: 'decision' });
+  projectMemory.rememberProjectMemory(root, { key: 'next-release', value: 'Add migration notes', type: 'todo' });
+  const entries = projectMemory.loadProjectMemory(root);
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].type, 'decision');
+  assert.match(projectMemory.formatProjectMemory(entries), /next-release/);
+  assert.equal(projectMemory.forgetProjectMemory(root, 'next-release'), true);
+  assert.equal(projectMemory.forgetProjectMemory(root, 'missing'), false);
+  projectMemory.clearProjectMemory(root);
+  assert.deepEqual(projectMemory.loadProjectMemory(root), []);
+});
+
+test('project memory rejects secret-like keys and values', () => {
+  assert.throws(() => projectMemory.normalizeEntry({ key: 'api-token', value: 'anything', type: 'fact' }), /секрет|авторизац/i);
+  assert.throws(() => projectMemory.normalizeEntry({ key: 'deploy-note', value: 'Bearer abcdefghijklmnop', type: 'fact' }), /секрет/i);
+  assert.throws(() => projectMemory.normalizeEntry({ key: 'note', value: 'value', type: 'unknown' }), /тип памяти/i);
+});
+
+test('coding agent project-memory tools obey permission and dry-run policy', async () => {
+  const root = tmpdir();
+  const config = agentCore.loadProjectConfig(root);
+  const context = { root, config, transaction: { audit() {}, before() {}, after() {} }, dryRun: true };
+  const planned = await agentInternals.executeTool('remember_project_memory', { key: 'style', value: 'Use concise logs', type: 'preference' }, context);
+  assert.equal(planned.dry_run, true);
+  assert.deepEqual(projectMemory.loadProjectMemory(root), []);
+  context.dryRun = false;
+  config.permissionMode = 'read-only';
+  const denied = await agentInternals.executeTool('remember_project_memory', { key: 'style', value: 'Use concise logs', type: 'preference' }, context);
+  assert.equal(denied.denied, true);
+  config.permissionMode = 'full';
+  const saved = await agentInternals.executeTool('remember_project_memory', { key: 'style', value: 'Use concise logs', type: 'preference' }, context);
+  assert.equal(saved.ok, true);
+  const read = await agentInternals.executeTool('get_project_memory', { type: 'preference' }, context);
+  assert.equal(read.entries.length, 1);
+});
+
+test('project memory participates in run rollback', async () => {
+  const root = tmpdir();
+  const config = agentCore.loadProjectConfig(root);
+  config.permissionMode = 'full';
+  const transaction = new agentCore.RunTransaction(root, 'memory rollback');
+  await agentInternals.executeTool('remember_project_memory', { key: 'temporary-decision', value: 'Ship experimental behavior', type: 'decision' }, { root, config, transaction });
+  assert.equal(projectMemory.loadProjectMemory(root).length, 1);
+  transaction.finish('failed', 'simulated');
+  transaction.rollback('undone');
+  assert.deepEqual(projectMemory.loadProjectMemory(root), []);
 });
 
 test('agent runtime enforces budgets, detects loops and records a report', () => {

@@ -8,6 +8,7 @@ const core = require('./lib/agent-core.js');
 const projectIndex = require('./lib/project-index.js');
 const { createCodingToolRegistry } = require('./lib/tool-registry.js');
 const { AgentRunController } = require('./lib/agent-runtime.js');
+const projectMemory = require('./lib/project-memory.js');
 
 const DEFAULT_URL = process.env.DEEPSEEK_API_URL || 'http://localhost:9655';
 const DEFAULT_MODEL = process.env.DEEPSEEK_AGENT_MODEL || 'deepseek-chat';
@@ -142,6 +143,9 @@ function printInteractiveHelp() {
 /models                показать доступные модели
 /mode <режим>          read-only, ask или full
 /status                текущие настройки
+/memory                долговременная память проекта
+/memory forget <key>   удалить одну запись памяти
+/memory clear          очистить всю долговременную память
 /new                   очистить контекст проекта и начать новый диалог
 /undo                  откатить последний запуск
 /help                  эта справка
@@ -217,6 +221,30 @@ function printChangePreview(before, after) {
 
 async function executeTool(name, args, context) {
   const { root, config, transaction } = context;
+  if (name === 'get_project_memory') {
+    const entries = projectMemory.loadProjectMemory(root);
+    return { entries: args.type ? entries.filter(item => item.type === args.type) : entries };
+  }
+  if (name === 'remember_project_memory') {
+    const entry = projectMemory.normalizeEntry(args);
+    if (context.dryRun) return { ok: true, dry_run: true, action: 'remember', entry };
+    if (!await authorizeMutation(context, `Запомнить для проекта ${entry.key}?`)) return { ok: false, denied: true, mode: config.permissionMode };
+    const target = projectMemory.memoryPath(root);
+    transaction.before(target);
+    const saved = projectMemory.rememberProjectMemory(root, entry);
+    transaction.after(target);
+    return { ok: true, entry: saved };
+  }
+  if (name === 'forget_project_memory') {
+    const key = projectMemory.normalizeKey(args.key);
+    if (context.dryRun) return { ok: true, dry_run: true, action: 'forget_memory', key };
+    if (!await authorizeMutation(context, `Удалить память проекта ${key}?`)) return { ok: false, denied: true, mode: config.permissionMode };
+    const target = projectMemory.memoryPath(root);
+    transaction.before(target);
+    const deleted = projectMemory.forgetProjectMemory(root, key);
+    transaction.after(target);
+    return { ok: true, key, deleted };
+  }
   if (name === 'get_project_map') {
     const index = projectIndex.createProjectIndex(root, config);
     return projectIndex.projectMapPage(index, args);
@@ -331,7 +359,7 @@ async function executeTool(name, args, context) {
   throw new Error(`Неизвестный инструмент: ${name}`);
 }
 
-function systemPrompt(root, permissionMode, index, dryRun = false) {
+function systemPrompt(root, permissionMode, index, memory, dryRun = false) {
   const prompt = `You are an autonomous coding agent working in this workspace: ${root}
 You can inspect and modify the workspace only through the provided tools.
 Current permission mode: ${permissionMode}.
@@ -344,9 +372,11 @@ Rules:
 - Protected secret files are intentionally unavailable. Never ask the user to expose credentials.
 - Never claim an action succeeded until its tool result confirms it.
 - If a tool is denied, adapt or explain what remains.
+- Use project memory only for durable facts, decisions, constraints, preferences and unfinished work. Never store secrets, transient logs or guesses.
+- Update an existing memory key when a durable decision changes, and forget it when it becomes obsolete.
 - Dry-run mode: ${dryRun ? 'ENABLED. Inspect normally and request intended mutations/commands so they can be reported, but understand they will not execute.' : 'disabled.'}
 - When the task is complete, respond with a concise summary of changes and verification.`;
-  return `${prompt}\n\n${projectIndex.formatProjectContext(index)}`;
+  return `${prompt}\n\n${projectMemory.formatProjectMemory(memory)}\n\n${projectIndex.formatProjectContext(index)}`;
 }
 
 function printProjectSummary(index, query = '') {
@@ -393,8 +423,9 @@ async function runAgent(task, options, rl) {
     remoteHasContext = sessionState.agents?.some(item => item.agent === session);
   } catch {}
   const previous = remoteHasContext ? [] : core.loadConversation(root, options.config);
+  const memory = projectMemory.loadProjectMemory(root);
   const messages = [
-    { role: 'system', content: systemPrompt(root, options.config.permissionMode, index, options.dryRun) },
+    { role: 'system', content: systemPrompt(root, options.config.permissionMode, index, memory, options.dryRun) },
     ...previous.flatMap(exchange => [
       { role: 'user', content: `[Previous project request]\n${exchange.user}` },
       { role: 'assistant', content: exchange.assistant },
@@ -500,8 +531,30 @@ async function interactive(options, models) {
       catch (error) { console.log(c.red(`Контекст не очищен: ${error.message}`)); }
       continue;
     }
+    if (task === '/memory') {
+      const entries = projectMemory.loadProjectMemory(options.workspace);
+      console.log(entries.length ? projectMemory.formatProjectMemory(entries) : c.dim('Память проекта пуста.'));
+      continue;
+    }
+    if (task === '/memory clear') {
+      if (await confirm(rl, 'Очистить всю долговременную память проекта?', false)) {
+        projectMemory.clearProjectMemory(options.workspace);
+        console.log(c.green('Долговременная память проекта очищена.'));
+      }
+      continue;
+    }
+    if (task.startsWith('/memory forget ')) {
+      try {
+        const key = task.slice('/memory forget '.length).trim();
+        if (await confirm(rl, `Удалить память проекта ${key}?`, false)) {
+          const deleted = projectMemory.forgetProjectMemory(options.workspace, key);
+          console.log(deleted ? c.green(`Удалено: ${key}`) : c.yellow(`Ключ не найден: ${key}`));
+        }
+      } catch (error) { console.log(c.red(error.message)); }
+      continue;
+    }
     if (task === '/status') {
-      console.log(`Папка: ${options.workspace}\nМодель: ${options.model}\nРежим: ${options.config.permissionMode}\nСессия: ${options.sessionId}\nИстория: ${options.config.historyEnabled ? `${core.loadConversation(options.workspace, options.config).length} диалогов` : 'отключена'}`);
+      console.log(`Папка: ${options.workspace}\nМодель: ${options.model}\nРежим: ${options.config.permissionMode}\nСессия: ${options.sessionId}\nИстория: ${options.config.historyEnabled ? `${core.loadConversation(options.workspace, options.config).length} диалогов` : 'отключена'}\nПамять: ${projectMemory.loadProjectMemory(options.workspace).length} записей`);
       continue;
     }
     if (task === '/undo') {

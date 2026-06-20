@@ -63,6 +63,8 @@ Built-in programs include Node package managers, Python/pip/pytest, Git, Rust/Ca
 ## Model tools
 
 - `get_project_map` — paginated/searchable project index
+- `get_project_memory` — read durable project facts and decisions
+- `remember_project_memory` and `forget_project_memory` — maintain durable non-secret context across conversations
 - `list_files` — bounded directory listing
 - `read_file` and `search_files` — inspect text inside the workspace
 - `write_file` and `replace_in_file` — atomic changes
@@ -111,7 +113,9 @@ Run manifests contain timestamps, tool names, targets, command metadata, result 
 
 Each workspace has a deterministic proxy session and saved request/result exchanges in `.deepseek-agent/conversation.json`. Therefore a new CLI process or Studio task continues the same project dialogue. By default the local history keeps 12 exchanges, at most 30,000 serialized characters, for 30 days. The four history settings above are clamped to safe bounds. Set `historyEnabled` to `false` for a repository that must never persist conversation context, or use `--no-history` for one private invocation; private invocations use an isolated proxy session and delete that remote session when they finish without erasing previously saved local history. Use `/new` interactively, `--new-session` for a one-shot run, or **Новый диалог** in Studio to clear both local history and the regular proxy session.
 
-Interactive commands are `/status`, `/mode <read-only|ask|full>`, `/models`, `/model <id>`, `/new`, `/undo`, `/help` and `/exit`. Use `--project-map --json` for machine-readable project inventory.
+Durable project memory is stored separately in `.deepseek-agent/memory.json`. The agent receives it at the start of every task, even after `/new`, and can maintain typed `fact`, `decision`, `constraint`, `preference`, and `todo` records through policy-controlled tools. Keys are updated in place, storage is bounded to 100 entries, and secret-like keys or values are rejected. `/memory` displays the records, `/memory forget <key>` removes one, and `/memory clear` removes all durable memory. Clearing conversation context intentionally does not erase project knowledge.
+
+Interactive commands are `/status`, `/mode <read-only|ask|full>`, `/models`, `/model <id>`, `/memory`, `/memory forget <key>`, `/memory clear`, `/new`, `/undo`, `/help` and `/exit`. Use `--project-map --json` for machine-readable project inventory.
 
 ## Known boundaries
 

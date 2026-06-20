@@ -24,6 +24,7 @@ The proxy process delegates stable infrastructure concerns to focused modules:
 - `lib/agent-core.js` enforces path and command policy, transaction snapshots, rollback and conversation persistence.
 - `lib/tool-registry.js` owns model-facing tool schemas and local read/write/command categories.
 - `lib/agent-runtime.js` owns run state, model/tool budgets, loop detection, usage accounting and JSON reports.
+- `lib/project-memory.js` stores bounded, typed and secret-filtered durable project knowledge independently from chat history.
 - `lib/project-index.js` produces the bounded project map used by the agent and Studio.
 - `.deepseek-agent/` contains protected local run state and is never exposed to model file tools.
 
