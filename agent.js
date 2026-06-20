@@ -6,6 +6,8 @@ const readline = require('readline/promises');
 const { api } = require('./client.js');
 const core = require('./lib/agent-core.js');
 const projectIndex = require('./lib/project-index.js');
+const { createCodingToolRegistry } = require('./lib/tool-registry.js');
+const { AgentRunController } = require('./lib/agent-runtime.js');
 
 const DEFAULT_URL = process.env.DEEPSEEK_API_URL || 'http://localhost:9655';
 const DEFAULT_MODEL = process.env.DEEPSEEK_AGENT_MODEL || 'deepseek-chat';
@@ -20,7 +22,8 @@ const c = {
 function parseArgs(argv) {
   const options = {
     workspace: process.cwd(), url: DEFAULT_URL, model: DEFAULT_MODEL,
-    yes: false, mode: '', undo: false, init: false, allowHome: false, projectMap: false, json: false, newSession: false, noHistory: false, maxSteps: 25, help: false, prompt: '',
+    yes: false, mode: '', undo: false, init: false, allowHome: false, projectMap: false, json: false, newSession: false, noHistory: false,
+    dryRun: false, report: '', maxSteps: 25, maxToolCalls: 100, help: false, prompt: '',
   };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
@@ -36,6 +39,7 @@ function parseArgs(argv) {
     else if (name === '--url') options.url = value();
     else if (name === '--model' || name === '-m') options.model = value();
     else if (name === '--max-steps') options.maxSteps = Number(value());
+    else if (name === '--max-tool-calls') options.maxToolCalls = Number(value());
     else if (name === '--yes' || name === '-y') options.yes = true;
     else if (name === '--mode') options.mode = value();
     else if (name === '--undo') options.undo = true;
@@ -45,6 +49,8 @@ function parseArgs(argv) {
     else if (name === '--json') options.json = true;
     else if (name === '--new-session') options.newSession = true;
     else if (name === '--no-history') options.noHistory = true;
+    else if (name === '--dry-run') options.dryRun = true;
+    else if (name === '--report') options.report = value();
     else if (name === '--help' || name === '-h') options.help = true;
     else if (arg.startsWith('-')) throw new Error(`Неизвестный параметр: ${arg}`);
     else positional.push(arg);
@@ -52,10 +58,14 @@ function parseArgs(argv) {
   options.workspace = path.resolve(options.workspace || process.cwd());
   options.url = String(options.url || DEFAULT_URL).replace(/\/+$/, '');
   options.model = String(options.model || DEFAULT_MODEL).toLowerCase();
+  if (options.report) options.report = path.resolve(options.report);
   options.prompt = positional.join(' ').trim();
   if (options.mode && !['read-only', 'ask', 'full'].includes(options.mode)) throw new Error('--mode должен быть read-only, ask или full');
   if (!Number.isInteger(options.maxSteps) || options.maxSteps < 1 || options.maxSteps > 100) {
     throw new Error('--max-steps должен быть целым числом от 1 до 100');
+  }
+  if (!Number.isInteger(options.maxToolCalls) || options.maxToolCalls < 1 || options.maxToolCalls > 1000) {
+    throw new Error('--max-tool-calls должен быть целым числом от 1 до 1000');
   }
   return options;
 }
@@ -82,7 +92,10 @@ ${c.bold('DeepSeek Coding Agent')}
       --json             JSON-вывод для --project-map
       --new-session      очистить контекст проекта перед запуском
       --no-history       не читать и не сохранять историю этого запуска
+      --dry-run          разрешить чтение, но только показать план изменений
+      --report <path>    сохранить структурированный JSON-отчёт запуска
       --max-steps <n>    максимум вызовов модели (25)
+      --max-tool-calls <n> максимум вызовов инструментов (100)
       --url <url>        адрес FreeDeepseekAPI
   -h, --help             справка
 
@@ -168,56 +181,8 @@ function readTextFile(file, maxBytes = 200000) {
   return buffer.toString('utf8');
 }
 
-const TOOLS = [
-  {
-    type: 'function', function: {
-      name: 'get_project_map', description: 'Get the complete indexed project file map with metadata and pagination. Use this before broad architectural work.',
-      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Optional path substring filter' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 1000 } } },
-    },
-  },
-  {
-    type: 'function', function: {
-      name: 'list_files', description: 'List files and directories inside the workspace. Generated/dependency directories are omitted.',
-      parameters: { type: 'object', properties: { path: { type: 'string', description: 'Relative directory, default .' }, depth: { type: 'integer', minimum: 0, maximum: 6 } } },
-    },
-  },
-  {
-    type: 'function', function: {
-      name: 'read_file', description: 'Read a UTF-8 text file with line numbers. Use before editing an existing file.',
-      parameters: { type: 'object', properties: { path: { type: 'string' }, start_line: { type: 'integer' }, end_line: { type: 'integer' } }, required: ['path'] },
-    },
-  },
-  {
-    type: 'function', function: {
-      name: 'search_files', description: 'Search for a literal text string in workspace text files.',
-      parameters: { type: 'object', properties: { query: { type: 'string' }, path: { type: 'string' }, case_sensitive: { type: 'boolean' } }, required: ['query'] },
-    },
-  },
-  {
-    type: 'function', function: {
-      name: 'write_file', description: 'Create or fully overwrite a UTF-8 text file. Read existing files first.',
-      parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
-    },
-  },
-  {
-    type: 'function', function: {
-      name: 'replace_in_file', description: 'Safely replace exact text in an existing file. Prefer this over rewriting a whole file.',
-      parameters: { type: 'object', properties: { path: { type: 'string' }, old_text: { type: 'string' }, new_text: { type: 'string' }, replace_all: { type: 'boolean' } }, required: ['path', 'old_text', 'new_text'] },
-    },
-  },
-  {
-    type: 'function', function: {
-      name: 'delete_path', description: 'Delete a file or directory inside the workspace. Use only when required by the user task.',
-      parameters: { type: 'object', properties: { path: { type: 'string' }, recursive: { type: 'boolean' } }, required: ['path'] },
-    },
-  },
-  {
-    type: 'function', function: {
-      name: 'run_command', description: 'Run an approved executable directly (without a shell) in the workspace to inspect, build, lint, or test.',
-      parameters: { type: 'object', properties: { program: { type: 'string', description: 'Executable, for example npm, node, python, pytest, git' }, args: { type: 'array', items: { type: 'string' } }, timeout_ms: { type: 'integer', minimum: 1000, maximum: 120000 } }, required: ['program', 'args'] },
-    },
-  },
-];
+const TOOL_REGISTRY = createCodingToolRegistry();
+const TOOLS = TOOL_REGISTRY.schemas();
 
 async function confirm(rl, message, yes) {
   if (yes) return true;
@@ -301,6 +266,7 @@ async function executeTool(name, args, context) {
     if (Buffer.byteLength(content) > config.maxFileBytes) throw new Error(`Содержимое превышает лимит ${config.maxFileBytes} байт`);
     const existed = fs.existsSync(target);
     if (config.permissionMode === 'ask') printChangePreview(existed ? readTextFile(target, config.maxFileBytes) : '', content);
+    if (context.dryRun) return { ok: true, dry_run: true, action: existed ? 'overwrite' : 'create', path: relativePath(root, target), bytes: Buffer.byteLength(content) };
     if (!await authorizeMutation(context, `${existed ? 'Перезаписать' : 'Создать'} ${relativePath(root, target)}?`)) return { ok: false, denied: true, mode: config.permissionMode };
     transaction.before(target);
     core.atomicWrite(target, content);
@@ -319,6 +285,7 @@ async function executeTool(name, args, context) {
     if (!args.replace_all && count > 1) throw new Error(`old_text найден ${count} раз; уточните фрагмент или установите replace_all=true`);
     const updated = args.replace_all ? current.split(oldText).join(newText) : current.replace(oldText, newText);
     if (config.permissionMode === 'ask') printChangePreview(current, updated);
+    if (context.dryRun) return { ok: true, dry_run: true, action: 'replace', path: relativePath(root, target), replacements: args.replace_all ? count : 1 };
     if (!await authorizeMutation(context, `Изменить ${relativePath(root, target)} (${args.replace_all ? count : 1} замена)?`)) return { ok: false, denied: true, mode: config.permissionMode };
     transaction.before(target);
     core.atomicWrite(target, updated);
@@ -332,6 +299,7 @@ async function executeTool(name, args, context) {
     if (!fs.existsSync(target)) throw new Error('Путь не существует');
     const stat = fs.lstatSync(target);
     if (stat.isDirectory() && !args.recursive) throw new Error('Для папки требуется recursive=true');
+    if (context.dryRun) return { ok: true, dry_run: true, action: 'delete', path: relativePath(root, target), recursive: stat.isDirectory() };
     if (!await authorizeMutation(context, `УДАЛИТЬ ${relativePath(root, target)}?`)) return { ok: false, denied: true, mode: config.permissionMode };
     transaction.before(target);
     fs.rmSync(target, { recursive: stat.isDirectory(), force: false });
@@ -343,6 +311,7 @@ async function executeTool(name, args, context) {
     const commandArgs = Array.isArray(args.args) ? args.args.map(String) : [];
     if (!program) throw new Error('Пустая программа');
     core.validateCommand(program, commandArgs, root, config);
+    if (context.dryRun) return { ok: true, dry_run: true, action: 'run', program, args: commandArgs };
     if (!await authorizeMutation(context, `Выполнить: ${program} ${commandArgs.join(' ')}?`)) return { ok: false, denied: true, mode: config.permissionMode };
     const timeoutMs = Math.min(Math.max(Number(args.timeout_ms || config.commandTimeoutMs), 1000), 120000);
     transaction.audit('command_started', { program, args: commandArgs, timeoutMs });
@@ -362,7 +331,7 @@ async function executeTool(name, args, context) {
   throw new Error(`Неизвестный инструмент: ${name}`);
 }
 
-function systemPrompt(root, permissionMode, index) {
+function systemPrompt(root, permissionMode, index, dryRun = false) {
   const prompt = `You are an autonomous coding agent working in this workspace: ${root}
 You can inspect and modify the workspace only through the provided tools.
 Current permission mode: ${permissionMode}.
@@ -375,6 +344,7 @@ Rules:
 - Protected secret files are intentionally unavailable. Never ask the user to expose credentials.
 - Never claim an action succeeded until its tool result confirms it.
 - If a tool is denied, adapt or explain what remains.
+- Dry-run mode: ${dryRun ? 'ENABLED. Inspect normally and request intended mutations/commands so they can be reported, but understand they will not execute.' : 'disabled.'}
 - When the task is complete, respond with a concise summary of changes and verification.`;
   return `${prompt}\n\n${projectIndex.formatProjectContext(index)}`;
 }
@@ -395,10 +365,17 @@ async function runAgent(task, options, rl) {
   const root = fs.realpathSync(options.workspace);
   const index = projectIndex.createProjectIndex(root, options.config);
   const transaction = new core.RunTransaction(root, task);
+  const runtime = new AgentRunController({
+    runId: transaction.id, task, model: options.model, workspace: root, dryRun: options.dryRun,
+    maxSteps: options.maxSteps, maxToolCalls: options.maxToolCalls,
+  });
+  runtime.start();
   let cancellationStarted = false;
   const cancelRun = () => {
     if (cancellationStarted) return;
     cancellationStarted = true;
+    runtime.finish('cancelled', 'Task cancelled by operator');
+    if (options.report) runtime.write(options.report);
     try {
       if (options.config.rollbackOnFailure && transaction.manifest.entries.length > 0) transaction.rollback('cancelled');
       else transaction.finish('cancelled', 'Task cancelled by operator');
@@ -417,7 +394,7 @@ async function runAgent(task, options, rl) {
   } catch {}
   const previous = remoteHasContext ? [] : core.loadConversation(root, options.config);
   const messages = [
-    { role: 'system', content: systemPrompt(root, options.config.permissionMode, index) },
+    { role: 'system', content: systemPrompt(root, options.config.permissionMode, index, options.dryRun) },
     ...previous.flatMap(exchange => [
       { role: 'user', content: `[Previous project request]\n${exchange.user}` },
       { role: 'assistant', content: exchange.assistant },
@@ -426,7 +403,8 @@ async function runAgent(task, options, rl) {
   ];
 
   try {
-  for (let step = 1; step <= options.maxSteps; step++) {
+  for (;;) {
+    const step = runtime.beginStep();
     process.stdout.write(c.dim(`\n[${step}/${options.maxSteps}] DeepSeek думает…\r`));
     const response = await api.request(`${options.url}/v1/chat/completions`, {
       method: 'POST',
@@ -435,14 +413,16 @@ async function runAgent(task, options, rl) {
     });
     process.stdout.write(' '.repeat(60) + '\r');
     const json = await response.json();
+    runtime.recordUsage(json.usage);
     const message = json.choices?.[0]?.message;
     if (!message) throw new Error('Модель вернула ответ неизвестного формата');
     const calls = message.tool_calls || [];
     if (!calls.length) {
       console.log(`${c.green('DeepSeek:')}\n${message.content || '(задача завершена без комментария)'}`);
       transaction.finish('completed');
+      runtime.finish('completed');
       core.saveConversationExchange(root, task, message.content || 'Задача завершена без итогового комментария.', options.config);
-      return { completed: true, content: message.content || '', runId: transaction.id };
+      return { completed: true, content: message.content || '', runId: transaction.id, report: runtime.toJSON() };
     }
 
     messages.push(message);
@@ -454,15 +434,20 @@ async function runAgent(task, options, rl) {
       const detail = args.path || args.program || args.query || '';
       console.log(`${c.cyan('→')} ${c.bold(name)} ${c.dim(String(detail).slice(0, 160))}`);
       let result;
-      try { result = await executeTool(name, args, { root, rl, config: options.config, transaction }); }
-      catch (error) { result = { ok: false, error: error.message }; }
+      if (!TOOL_REGISTRY.has(name)) result = { ok: false, error: `Неизвестный инструмент: ${name}` };
+      else {
+        runtime.acceptToolCall(name, args);
+        try { result = await executeTool(name, args, { root, rl, config: options.config, transaction, dryRun: options.dryRun }); }
+        catch (error) { result = { ok: false, error: error.message }; }
+      }
+      runtime.recordToolResult(name, args, result, TOOL_REGISTRY.has(name) ? TOOL_REGISTRY.kind(name) : 'read');
       transaction.audit('tool_result', { tool: name, ok: result.ok !== false && !result.error, target: String(detail).slice(0, 500), error: result.error || null });
       console.log(`${result.ok === false || result.error ? c.red('← ошибка') : c.green('← готово')} ${c.dim(JSON.stringify(result).slice(0, 500))}`);
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
     }
   }
-  throw new Error(`Достигнут лимит ${options.maxSteps} шагов. Увеличьте --max-steps или уточните задачу.`);
   } catch (error) {
+    runtime.finish('failed', error.message);
     transaction.finish('failed', error.message);
     if (options.config.rollbackOnFailure && transaction.manifest.entries.length > 0) {
       try {
@@ -475,6 +460,7 @@ async function runAgent(task, options, rl) {
     throw error;
   } finally {
     process.removeListener('SIGTERM', cancelRun);
+    if (options.report) runtime.write(options.report);
   }
 }
 

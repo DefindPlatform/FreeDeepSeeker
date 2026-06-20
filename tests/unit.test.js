@@ -10,6 +10,8 @@ const serverInternals = require('../server.js').__test;
 const clientInternals = require('../client.js').__test;
 const agentInternals = require('../agent.js').__test;
 const agentCore = require('../lib/agent-core.js');
+const { ToolRegistry, createCodingToolRegistry } = require('../lib/tool-registry.js');
+const { AgentRunController, toolSignature } = require('../lib/agent-runtime.js');
 const projectIndex = require('../lib/project-index.js');
 const studio = require('../studio-server.js');
 const { loadServerConfig } = require('../lib/server-config.js');
@@ -333,6 +335,53 @@ test('coding agent parses workspace and autonomous mode', () => {
   assert.equal(args.maxSteps, 12);
   assert.equal(args.model, 'deepseek-reasoner');
   assert.equal(args.prompt, 'Исправь тесты');
+});
+
+test('coding agent parses runtime budgets, dry-run and report output', () => {
+  const args = agentInternals.parseArgs(['--dry-run', '--max-tool-calls', '17', '--report', 'run.json', 'inspect']);
+  assert.equal(args.dryRun, true);
+  assert.equal(args.maxToolCalls, 17);
+  assert.equal(args.report, path.join(ROOT, 'run.json'));
+  assert.throws(() => agentInternals.parseArgs(['--max-tool-calls', '0']), /от 1 до 1000/);
+});
+
+test('tool registry exposes provider schemas and permission kinds', () => {
+  const registry = createCodingToolRegistry();
+  assert.equal(registry.names().length, 8);
+  assert.equal(registry.kind('read_file'), 'read');
+  assert.equal(registry.kind('write_file'), 'write');
+  assert.equal(registry.kind('run_command'), 'command');
+  assert.equal(registry.schemas()[0].kind, undefined);
+  assert.throws(() => new ToolRegistry([{ kind: 'magic', type: 'function', function: { name: 'bad', parameters: { type: 'object' } } }]), /unknown|неизвестный/i);
+});
+
+test('agent runtime enforces budgets, detects loops and records a report', () => {
+  const runtime = new AgentRunController({ maxSteps: 2, maxToolCalls: 4, repeatLimit: 2, task: 'test', dryRun: true });
+  runtime.start();
+  assert.equal(runtime.beginStep(), 1);
+  runtime.acceptToolCall('read_file', { path: 'a.js', start_line: 1 });
+  runtime.acceptToolCall('read_file', { start_line: 1, path: 'a.js' });
+  assert.throws(() => runtime.acceptToolCall('read_file', { path: 'a.js', start_line: 1 }), /цикл/i);
+  runtime.recordUsage({ prompt_tokens: 10, total_tokens: 12 });
+  runtime.finish('failed', 'loop');
+  const report = runtime.toJSON();
+  assert.equal(report.state, 'failed');
+  assert.equal(report.toolCalls, 2);
+  assert.equal(report.usage.prompt_tokens, 10);
+  assert.equal(toolSignature('x', { b: 1, a: 2 }), toolSignature('x', { a: 2, b: 1 }));
+});
+
+test('coding agent dry-run validates but does not mutate files or launch commands', async () => {
+  const root = tmpdir();
+  const config = agentCore.loadProjectConfig(root);
+  config.permissionMode = 'full';
+  const target = path.join(root, 'planned.txt');
+  const transaction = { before() { throw new Error('must not mutate'); }, after() {}, audit() {} };
+  const write = await agentInternals.executeTool('write_file', { path: 'planned.txt', content: 'future' }, { root, config, transaction, dryRun: true });
+  const command = await agentInternals.executeTool('run_command', { program: 'node', args: ['--version'] }, { root, config, transaction, dryRun: true });
+  assert.equal(write.dry_run, true);
+  assert.equal(command.dry_run, true);
+  assert.equal(fs.existsSync(target), false);
 });
 
 test('coding agent parses project-map output flags', () => {

@@ -203,6 +203,7 @@ npm run client -- -m deepseek-reasoner Реши задачу
 npm run agent -- --help
 npm run agent -- --yes Исправь тесты
 npm run agent -- --mode ask Проверь код на уязвимости
+npm run agent -- --dry-run --report .deepseek-agent/plan.json "Спланируй рефакторинг"
 npm run agent -- --undo
 ```
 

@@ -9,12 +9,14 @@ The normal lifecycle is:
 1. Resolve and canonicalize the workspace.
 2. Load `.deepseek-agent.json` and the selected permission mode.
 3. Create a run transaction under `.deepseek-agent/runs/<run-id>`.
-4. Ask the model for one tool call at a time.
+4. Start a bounded runtime state machine and ask the model for tool calls.
 5. Validate path, protected-file, command, size, and approval policy.
 6. Snapshot a path before its first mutation and write atomically.
 7. Execute relevant checks with a structured executable/argument call.
 8. Record tool and command events in the run manifest.
-9. Complete the transaction or automatically roll file mutations back after failure.
+9. Stop repeated identical calls and enforce both model-step and tool-call budgets.
+10. Complete the transaction or automatically roll file mutations back after failure.
+11. Optionally write a machine-readable run report with state, usage and tool outcomes.
 
 ## Permission modes
 
@@ -68,6 +70,21 @@ Built-in programs include Node package managers, Python/pip/pytest, Git, Rust/Ca
 - `run_command` — structured executable plus argument array
 
 All paths remain workspace-relative and protected paths are rejected for reads and mutations.
+
+Schemas and permission categories are owned by `lib/tool-registry.js`. The provider receives schemas without internal metadata, while the local runtime retains each tool's `read`, `write`, or `command` category for policy and reporting.
+
+## Runtime controls and dry-run
+
+`--max-steps` limits model round trips and `--max-tool-calls` independently limits local tool requests. The runtime rejects a fourth identical tool call by default, including calls whose JSON object keys only differ in order. This prevents a confused model from consuming the complete budget in a tight loop.
+
+Use `--dry-run` to let the model inspect the project and request intended writes, deletions, or commands without executing them. Mutation tools still validate paths, protected files, content size, exact replacement matches, command allowlists and arguments. Their results are marked `dry_run: true`, allowing the model to return a concrete implementation plan based on real files.
+
+Use `--report <path>` to atomically save a JSON report. It contains the run state, timestamps, model, workspace, counters, provider token usage when available, and sanitized tool outcomes. File contents and command output are not copied into the report.
+
+```powershell
+deepseek-agent --dry-run --report .deepseek-agent\plan.json "Обнови API"
+deepseek-agent --max-steps 40 --max-tool-calls 160 "Исправь тесты"
+```
 
 ## Filesystem safety
 
