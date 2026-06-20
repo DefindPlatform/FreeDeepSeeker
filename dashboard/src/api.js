@@ -15,3 +15,5 @@ export const resetContext = () => request('/api/session/reset', { method: 'POST'
 export const selectProject = path => request('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
 export const commitChanges = (message, confirmed) => request('/api/git/commit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message, confirmed }) });
 export const pushChanges = confirmed => request('/api/git/push', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed }) });
+export const forgetMemory = (key, confirmed) => request('/api/memory/forget', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key, confirmed }) });
+export const clearMemory = confirmed => request('/api/memory/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmed }) });

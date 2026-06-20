@@ -1,9 +1,10 @@
 import { Database, File, FlaskConical, ShieldCheck } from 'lucide-react';
 import { GitPanel } from './GitPanel.jsx';
+import { MemoryPanel } from './MemoryPanel.jsx';
 
 const COLORS = ['#e7cc4b', '#5f9eea', '#9fbd62', '#87909a', '#a77bd4', '#ef7f32'];
 
-export function Insights({ project, latestRun, api, git, onCommit, onPush, disabled }) {
+export function Insights({ project, latestRun, api, git, memory, onCommit, onPush, onForgetMemory, onClearMemory, disabled }) {
   const max = Math.max(...project.languages.map(item => item.count), 1);
   return <aside className="insights-panel">
     <h2>Состояние проекта</h2>
@@ -15,6 +16,7 @@ export function Insights({ project, latestRun, api, git, onCommit, onPush, disab
     <section className="language-section"><h3>Языки <span>по файлам</span></h3>{project.languages.slice(0, 8).map((item, index) => <div className="language-row" key={item.name}><span>{item.name}</span><i><b style={{width: `${item.count / max * 100}%`, background: COLORS[index % COLORS.length]}}/></i><strong>{item.count}</strong></div>)}</section>
     <section className="status-section"><h3>API</h3><div className={`health ${api.online ? 'healthy' : 'offline'}`}><span/><strong>{api.online ? 'Подключено' : 'Недоступно'}</strong><small>{api.baseUrl || 'не настроен'}</small></div></section>
     <GitPanel git={git} onCommit={onCommit} onPush={onPush} disabled={disabled}/>
+    <MemoryPanel entries={memory} disabled={disabled} onForget={onForgetMemory} onClear={onClearMemory}/>
     <section className="audit-section"><h3>Аудит</h3><div className="audit-box"><ShieldCheck size={20}/><div><strong>{latestRun ? statusLabel(latestRun.status) : 'Нет запусков'}</strong><small>{latestRun?.id || 'История появится после задачи'}</small></div></div></section>
   </aside>;
 }

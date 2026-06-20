@@ -512,7 +512,7 @@ async function resetRemoteContext(options) {
 async function interactive(options, models) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   console.log(`${c.bold('\nDeepSeek Coding Agent')}\nПапка: ${c.cyan(options.workspace)}\nМодель: ${options.model}\nРежим: ${c.yellow(options.config.permissionMode)}\nПроект: ${options.projectIndex.fileCount} файлов · ${options.projectIndex.languages.slice(0, 4).map(item => item.name).join(', ')}\n`);
-  console.log(c.dim('Опишите задачу. Команды: /status, /mode <read-only|ask|full>, /new, /undo, /model <id>, /exit'));
+  console.log(c.dim('Опишите задачу. Команды: /status, /memory, /mode <read-only|ask|full>, /new, /undo, /model <id>, /exit'));
   rl.on('SIGINT', () => rl.close());
   while (true) {
     let task;

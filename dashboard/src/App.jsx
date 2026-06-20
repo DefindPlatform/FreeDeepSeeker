@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Bot, Box, BrainCircuit, Check, ChevronDown, Cpu, Eye, FolderGit2, FolderPlus, Globe2, Hand, Search, Shield, ShieldAlert, Sparkles } from 'lucide-react';
-import { cancelTask, commitChanges, getFile, getGitState, getState, pushChanges, resetContext, selectProject, startTask, undoRun } from './api.js';
+import { cancelTask, clearMemory, commitChanges, forgetMemory, getFile, getGitState, getState, pushChanges, resetContext, selectProject, startTask, undoRun } from './api.js';
 import { ProjectTree } from './components/ProjectTree.jsx';
 import { Timeline } from './components/Timeline.jsx';
 import { DiffViewer } from './components/DiffViewer.jsx';
@@ -91,13 +91,21 @@ export function App() {
     if (!window.confirm(`Отправить ветку ${git?.branch || ''} в ${git?.upstream || 'origin'}?`)) return;
     try { await pushChanges(true); await refreshGit(); return true; } catch (cause) { setError(cause.message); return false; }
   };
+  const removeMemory = async key => {
+    if (!window.confirm(`Удалить запись памяти «${key}»?`)) return;
+    try { await forgetMemory(key, true); await refresh(); } catch (cause) { setError(cause.message); }
+  };
+  const removeAllMemory = async () => {
+    if (!window.confirm('Очистить всю долговременную память проекта? История диалога останется.')) return;
+    try { await clearMemory(true); await refresh(); } catch (cause) { setError(cause.message); }
+  };
 
   if (!state) return <div className="loading"><Bot/> <span>{error || 'Загрузка Agent Studio…'}</span></div>;
   const activeDiff = diffRun?.diffs?.[0] || null;
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><Bot size={18}/><strong>DeepSeek Agent Studio</strong></div><ProjectMenu workspace={state.workspace} projects={state.projects || []} onSelect={changeProject}/><ModelMenu models={models.length ? models : [{id:'deepseek-chat'}]} value={model} onChange={setModel}/><PermissionMenu value={mode} onChange={setMode}/><TopItem icon={<Box className={state.api.online ? 'online-icon' : 'offline-icon'}/>} label="Подключение" value={state.api.online ? state.api.baseUrl : 'Нет соединения'}/></header>
     {error ? <div className="error-banner">{error}<button onClick={() => setError('')}>×</button></div> : null}
-    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(undoableRun)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} onCancel={cancel} onResetContext={startNewDialog} running={running} cancelling={cancelling} historyEnabled={state.conversation?.enabled !== false} exchanges={state.conversation?.exchanges || 0}/></main><Insights project={state.project} latestRun={latestRun} api={state.api} git={git} onCommit={commit} onPush={push} disabled={running}/></div>
+    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(undoableRun)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} onCancel={cancel} onResetContext={startNewDialog} running={running} cancelling={cancelling} historyEnabled={state.conversation?.enabled !== false} exchanges={state.conversation?.exchanges || 0}/></main><Insights project={state.project} latestRun={latestRun} api={state.api} git={git} memory={state.memory?.entries || []} onCommit={commit} onPush={push} onForgetMemory={removeMemory} onClearMemory={removeAllMemory} disabled={running}/></div>
     {pendingApproval ? <div className="modal-backdrop" role="presentation"><section className="approval-modal" role="dialog" aria-modal="true" aria-labelledby="approval-title"><ShieldAlert size={24}/><h2 id="approval-title">Разрешить изменения задачи?</h2><p>Agent получит режим full только для этого запуска. Все файловые изменения попадут в транзакцию и смогут быть откатаны.</p><pre>{prompt}</pre><div><button onClick={() => setPendingApproval(false)}>Отмена</button><button className="approve" onClick={() => executeTask(true)}>Подтвердить и запустить</button></div></section></div> : null}
   </div>;
 }

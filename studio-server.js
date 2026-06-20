@@ -8,6 +8,7 @@ const projectIndex = require('./lib/project-index.js');
 const { createLogger, attachRequestLog } = require('./lib/logger.js');
 const gitService = require('./lib/git-service.js');
 const projectRegistry = require('./lib/project-registry.js');
+const projectMemory = require('./lib/project-memory.js');
 
 function parseArgs(argv) {
   const options = { workspace: process.cwd(), port: 9660 };
@@ -158,6 +159,7 @@ function createStudioServer(options) {
       runs: loadRuns(workspace),
       task,
       conversation: { sessionId, exchanges: core.loadConversation(workspace, config).length, enabled: config.historyEnabled },
+      memory: { entries: projectMemory.loadProjectMemory(workspace) },
       api: { online: Boolean(health), baseUrl: apiBaseUrl, health, models: models?.data || [] },
     };
   };
@@ -249,6 +251,23 @@ function createStudioServer(options) {
       }
       if (req.method === 'POST' && url.pathname === '/api/tasks') return json(res, 202, startTask(await readJson(req)));
       if (req.method === 'POST' && url.pathname === '/api/projects') return json(res, 200, selectProject((await readJson(req)).path));
+      if (req.method === 'POST' && url.pathname === '/api/memory/forget') {
+        if (activeChild || ['running', 'cancelling'].includes(task?.status)) throw new Error('Нельзя менять память во время выполнения задачи');
+        const body = await readJson(req);
+        if (body.confirmed !== true) throw new Error('Для удаления памяти требуется явное подтверждение');
+        const key = projectMemory.normalizeKey(body.key);
+        const deleted = projectMemory.forgetProjectMemory(workspace, key);
+        publish('memory-changed', { action: 'forget', key });
+        return json(res, 200, { key, deleted });
+      }
+      if (req.method === 'POST' && url.pathname === '/api/memory/clear') {
+        if (activeChild || ['running', 'cancelling'].includes(task?.status)) throw new Error('Нельзя менять память во время выполнения задачи');
+        const body = await readJson(req);
+        if (body.confirmed !== true) throw new Error('Для очистки памяти требуется явное подтверждение');
+        projectMemory.clearProjectMemory(workspace);
+        publish('memory-changed', { action: 'clear' });
+        return json(res, 200, { status: 'memory_cleared' });
+      }
       if (req.method === 'POST' && url.pathname === '/api/git/commit') {
         if (activeChild || ['running', 'cancelling'].includes(task?.status)) throw new Error('Нельзя создать коммит во время выполнения задачи');
         const body = await readJson(req);

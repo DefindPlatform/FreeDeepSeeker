@@ -236,6 +236,30 @@ main { min-width: 0; display: grid; grid-template-rows: auto minmax(230px, 1fr) 
 .git-actions button:disabled { opacity: .35; cursor: default; }
 .git-empty { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; line-height: 1.45; }
 .git-empty svg { width: 13px; }
+.memory-section { display: grid; gap: 10px; }
+.memory-heading { display: flex; align-items: center; justify-content: space-between; }
+.memory-heading h3 { margin: 0; }
+.memory-heading button { display: flex; align-items: center; gap: 4px; border: 0; background: transparent; color: #9ca9b4; font-size: 8px; cursor: pointer; }
+.memory-heading button:hover:not(:disabled) { color: #ff8e8e; }
+.memory-heading button:disabled, .memory-list button:disabled { opacity: .35; cursor: default; }
+.memory-heading svg { width: 11px; }
+.memory-list { max-height: 260px; overflow: auto; display: grid; gap: 6px; scrollbar-width: thin; }
+.memory-list article { position: relative; display: grid; gap: 5px; padding: 9px 28px 9px 9px; border: 1px solid var(--border); border-radius: 6px; background: rgba(255,255,255,.025); }
+.memory-list article > div { min-width: 0; display: flex; align-items: center; gap: 6px; }
+.memory-list article span { flex: none; border-radius: 999px; padding: 2px 5px; background: #243140; color: #9fb5c8; font-size: 7px; text-transform: uppercase; }
+.memory-list article span[data-type="decision"] { background: #24382c; color: #83d49a; }
+.memory-list article span[data-type="constraint"] { background: #3a3020; color: #e8c36c; }
+.memory-list article span[data-type="todo"] { background: #38272a; color: #ec929c; }
+.memory-list article strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 9px var(--mono); }
+.memory-list article p { margin: 0; color: #b8c4ce; font-size: 9px; line-height: 1.45; overflow-wrap: anywhere; }
+.memory-list article > button { position: absolute; top: 7px; right: 6px; display: grid; place-items: center; width: 21px; height: 21px; border: 0; border-radius: 4px; background: transparent; color: #71808c; cursor: pointer; }
+.memory-list article > button:hover:not(:disabled) { background: #362128; color: #ff9098; }
+.memory-list article > button svg { width: 11px; }
+.memory-empty { display: flex; gap: 9px; align-items: flex-start; color: var(--muted); }
+.memory-empty > svg { flex: none; width: 17px; color: #748b9d; }
+.memory-empty span { display: grid; gap: 3px; }
+.memory-empty strong { color: #b3c0ca; font-size: 10px; }
+.memory-empty small { font-size: 8px; line-height: 1.45; }
 .error-banner { position: fixed; z-index: 10; top: 61px; left: 50%; transform: translateX(-50%); display: flex; gap: 18px; align-items: center; max-width: 560px; border: 1px solid #864747; border-radius: 5px; padding: 8px 12px; background: #341c20; color: #ffb6b6; font-size: 11px; }
 .error-banner button { border: 0; background: transparent; color: inherit; cursor: pointer; }
 .loading { height: 100%; display: grid; place-content: center; justify-items: center; gap: 15px; color: var(--muted); }

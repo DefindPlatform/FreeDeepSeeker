@@ -19,6 +19,10 @@ function fixtureState() {
     runs: [],
     task: null,
     conversation: { sessionId: 'e2e-session', exchanges: 2, enabled: true },
+    memory: { entries: [
+      { key: 'api-style', value: 'Keep OpenAI compatibility', type: 'constraint', updatedAt: '2026-06-20T00:00:00.000Z' },
+      { key: 'next-release', value: 'Add migration notes', type: 'todo', updatedAt: '2026-06-20T00:00:00.000Z' },
+    ] },
     api: {
       online: true, baseUrl: 'http://127.0.0.1:9655', health: { status: 'ok' },
       models: [
@@ -57,6 +61,15 @@ async function mockStudioApi(page) {
     if (url.pathname === '/api/session/reset') {
       state.conversation.exchanges = 0;
       return route.fulfill({ json: { status: 'context_reset' } });
+    }
+    if (url.pathname === '/api/memory/forget') {
+      const body = request.postDataJSON();
+      state.memory.entries = state.memory.entries.filter(entry => entry.key !== body.key);
+      return route.fulfill({ json: { key: body.key, deleted: true } });
+    }
+    if (url.pathname === '/api/memory/clear') {
+      state.memory.entries = [];
+      return route.fulfill({ json: { status: 'memory_cleared' } });
     }
     if (url.pathname === '/api/projects' && request.method() === 'POST') {
       const body = request.postDataJSON(); calls.projects.push(body);
@@ -136,4 +149,21 @@ test('project switching and confirmed Git actions are visible and functional', a
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', { name: 'Push' }).click();
   await expect.poll(() => calls.pushes).toBe(1);
+});
+
+test('durable project memory can be reviewed and cleared', async ({ page }) => {
+  const { state } = await mockStudioApi(page);
+  await page.goto('/');
+  await expect(page.getByText('api-style')).toBeVisible();
+  await expect(page.getByText('Keep OpenAI compatibility')).toBeVisible();
+
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Удалить api-style' }).click();
+  await expect(page.getByText('api-style')).toHaveCount(0);
+  expect(state.memory.entries).toHaveLength(1);
+
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Очистить' }).click();
+  await expect(page.getByText('Память пока пуста')).toBeVisible();
+  expect(state.memory.entries).toHaveLength(0);
 });

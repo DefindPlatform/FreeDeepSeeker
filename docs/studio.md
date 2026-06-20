@@ -22,6 +22,8 @@ Run the browser regression suite with `npm run studio:e2e`. It starts an isolate
 
 Tasks in the same workspace reuse a deterministic session and saved project history, including across new agent processes and proxy restarts. The default history stores up to 12 final request/result exchanges for 30 days under `.deepseek-agent/conversation.json`; limits are configurable in `.deepseek-agent.json`. Set `historyEnabled` to `false` to make Studio launch every task with isolated, non-persistent context. **Новый диалог** clears the regular project history and resets the corresponding proxy session; it does not undo code changes.
 
+The right sidebar shows durable project memory separately from chat history. Each typed record can be reviewed and removed, or the complete memory can be cleared with explicit confirmation. Memory controls are disabled while a task is running, and clearing a dialog does not clear durable project knowledge.
+
 ## Permission behavior
 
 - `read-only`: the spawned agent cannot mutate files or run commands.

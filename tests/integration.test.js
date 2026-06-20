@@ -10,6 +10,7 @@ const { PassThrough } = require('node:stream');
 
 const ROOT = path.resolve(__dirname, '..');
 const { createStudioServer } = require('../studio-server.js');
+const projectMemory = require('../lib/project-memory.js');
 
 async function freePort() {
   const listener = net.createServer();
@@ -176,6 +177,18 @@ test('Studio streams events and cancels an active agent task', async t => {
   assert.equal(switchedState.workspace, fs.realpathSync(secondWorkspace));
   assert.equal(switchedState.projects.length, 2);
   assert.equal(switchedState.project.files[0].path, 'SECOND.md');
+  projectMemory.rememberProjectMemory(secondWorkspace, { key: 'release-rule', value: 'Run all tests before push', type: 'constraint' });
+  const memoryState = await fetch(`${baseUrl}/api/state`).then(response => response.json());
+  assert.equal(memoryState.memory.entries[0].key, 'release-rule');
+  const unconfirmedForget = await fetch(`${baseUrl}/api/memory/forget`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'release-rule' }),
+  });
+  assert.equal(unconfirmedForget.status, 400);
+  const forgotten = await fetch(`${baseUrl}/api/memory/forget`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: 'release-rule', confirmed: true }),
+  });
+  assert.equal(forgotten.status, 200);
+  assert.equal((await forgotten.json()).deleted, true);
   const rejectedCommit = await fetch(`${baseUrl}/api/git/commit`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'No confirmation' }),
   });
