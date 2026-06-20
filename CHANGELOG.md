@@ -2,6 +2,12 @@
 
 All notable changes are documented here. Versions follow Semantic Versioning.
 
+## Unreleased
+
+- Added remembered multi-project switching to Agent Studio.
+- Added a guarded Git panel with status, bounded diff, commit and push flows.
+- Extended Studio browser coverage across desktop and mobile viewports.
+
 ## 0.1.0
 
 - OpenAI Chat Completions, Responses API and Anthropic Messages compatibility.

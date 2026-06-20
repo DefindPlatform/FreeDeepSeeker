@@ -122,7 +122,10 @@ test('health checks bypass rate limiting while API routes do not', async t => {
 
 test('Studio streams events and cancels an active agent task', async t => {
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'fdsapi-studio-'));
+  const secondWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'fdsapi-studio-second-'));
+  const registryFile = path.join(workspace, 'studio-projects.json');
   fs.writeFileSync(path.join(workspace, 'README.md'), '# test\n');
+  fs.writeFileSync(path.join(secondWorkspace, 'SECOND.md'), '# second\n');
   const port = await freePort();
   let child;
   const spawnAgent = () => {
@@ -133,11 +136,12 @@ test('Studio streams events and cancels an active agent task', async t => {
     child.kill = () => { queueMicrotask(() => child.emit('close', null)); return true; };
     return child;
   };
-  const server = createStudioServer({ workspace, port, spawnAgent });
+  const server = createStudioServer({ workspace, port, spawnAgent, registryFile });
   await new Promise((resolve, reject) => server.listen(port, '127.0.0.1', resolve).once('error', reject));
   t.after(async () => {
     await new Promise(resolve => server.close(resolve));
     fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(secondWorkspace, { recursive: true, force: true });
   });
   const baseUrl = `http://127.0.0.1:${port}`;
   const events = await fetch(`${baseUrl}/api/events`);
@@ -152,6 +156,11 @@ test('Studio streams events and cancels an active agent task', async t => {
   });
   assert.equal(started.status, 202);
   child.stdout.write('working\n');
+  const commitWhileRunning = await fetch(`${baseUrl}/api/git/commit`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'Race', confirmed: true }),
+  });
+  assert.equal(commitWhileRunning.status, 400);
+  assert.match((await commitWhileRunning.json()).error, /во время выполнения задачи/);
   const cancelled = await fetch(`${baseUrl}/api/tasks/cancel`, { method: 'POST' });
   assert.equal(cancelled.status, 202);
   await new Promise(resolve => setImmediate(resolve));
@@ -159,4 +168,16 @@ test('Studio streams events and cancels an active agent task', async t => {
   assert.equal(state.task.status, 'cancelled');
   assert.equal(state.task.lines[0].text, 'working');
   assert.equal((await fetch(`${baseUrl}/api/tasks/cancel`, { method: 'POST' })).status, 400);
+  const switched = await fetch(`${baseUrl}/api/projects`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: secondWorkspace }),
+  });
+  assert.equal(switched.status, 200);
+  const switchedState = await fetch(`${baseUrl}/api/state`).then(response => response.json());
+  assert.equal(switchedState.workspace, fs.realpathSync(secondWorkspace));
+  assert.equal(switchedState.projects.length, 2);
+  assert.equal(switchedState.project.files[0].path, 'SECOND.md');
+  const rejectedCommit = await fetch(`${baseUrl}/api/git/commit`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'No confirmation' }),
+  });
+  assert.equal(rejectedCommit.status, 400);
 });

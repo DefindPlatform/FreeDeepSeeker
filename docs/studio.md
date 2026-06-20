@@ -1,6 +1,10 @@
 # DeepSeek Agent Studio
 
-Studio is a local dashboard for one workspace. It displays the project tree, selected file, current task output, transaction diffs, project statistics, conversation count and undo state.
+Studio is a local dashboard for multiple remembered workspaces. It displays the active project tree, selected file, current task output, transaction diffs, project statistics, conversation count, Git state and undo state.
+
+Studio keeps up to 30 valid recent workspaces in `%USERPROFILE%\.deepseek-studio\projects.json`. Open the workspace menu to switch projects or add an absolute folder path. Switching is blocked while an agent task is running, and every project keeps its own conversation and transaction history.
+
+The Git panel shows the current branch, upstream, ahead/behind counts, changed files and a bounded diff. **Commit** stages all changes inside the selected workspace and creates a one-line commit after confirmation. **Push** sends only the current branch to its configured upstream (or establishes `origin/<branch>`) after a separate confirmation. Credentials are never accepted by Studio and interactive Git prompts are disabled.
 
 ## Start
 
@@ -33,7 +37,11 @@ Only one task can run at a time. Studio receives task changes over a same-origin
 | `GET` | `/api/events` | Same-origin server-sent events for task/context changes |
 | `GET` | `/api/state` | Workspace, API, task, conversation and transaction state |
 | `GET` | `/api/file?path=<relative>` | Read allowed text; binaries return a notice |
+| `GET` | `/api/git` | Git branch, status and bounded staged/working-tree diff |
 | `POST` | `/api/tasks` | Start `{prompt, model, mode, approved}` |
+| `POST` | `/api/projects` | Validate, remember and switch to `{path}` |
+| `POST` | `/api/git/commit` | Commit all workspace changes with `{message, confirmed:true}` |
+| `POST` | `/api/git/push` | Push the current branch with `{confirmed:true}` |
 | `POST` | `/api/tasks/cancel` | Stop the active agent task |
 | `POST` | `/api/undo` | Undo the newest undoable transaction |
 | `POST` | `/api/session/reset` | Clear project conversation and proxy session |

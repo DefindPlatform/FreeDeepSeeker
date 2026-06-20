@@ -32,6 +32,26 @@ button { color: inherit; }
 .top-item span { min-width: 0; display: grid; gap: 2px; }
 .top-item small { color: var(--muted); font-size: 10px; }
 .top-item strong, .top-item select { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 550; color: #d9e0e6; }
+.project-picker { position: relative; padding-right: 8px; }
+.project-trigger { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; padding: 0; background: transparent; text-align: left; cursor: pointer; }
+.project-trigger > span { flex: 1; }
+.project-trigger > svg { width: 14px; color: var(--muted); transition: transform .16s ease; }
+.project-trigger > svg.rotated { transform: rotate(180deg); }
+.project-menu { position: absolute; z-index: 35; top: calc(100% + 7px); left: 7px; width: min(520px, calc(100vw - 24px)); overflow: hidden; border: 1px solid #303943; border-radius: 9px; padding: 6px; background: #171a1f; box-shadow: 0 18px 55px rgba(0,0,0,.55); }
+.project-menu > h3 { padding: 7px 9px 5px; color: #737d87; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.project-menu > button { width: 100%; min-height: 49px; display: grid; grid-template-columns: 25px 1fr 20px; align-items: center; gap: 8px; border: 0; border-radius: 6px; padding: 7px 9px; background: transparent; text-align: left; cursor: pointer; }
+.project-menu > button:hover, .project-menu > button:focus-visible { outline: 0; background: #22272e; }
+.project-menu > button > svg { width: 15px; color: #9eabb7; }
+.project-menu > button span { min-width: 0; display: grid; gap: 3px; }
+.project-menu > button strong, .project-menu > button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-menu > button small { color: var(--muted); font: 9px var(--mono); }
+.project-menu > button[aria-checked="true"] > svg:last-child { color: var(--green); }
+.project-menu form { height: 43px; display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 6px; margin-top: 5px; border-top: 1px solid var(--border); padding: 6px 5px 0; }
+.project-menu form > svg { width: 15px; color: var(--muted); }
+.project-menu form input { min-width: 0; height: 30px; border: 1px solid #343d47; border-radius: 5px; outline: 0; padding: 0 8px; background: #101419; color: var(--text); font: 10px var(--mono); }
+.project-menu form input:focus { border-color: #57789b; }
+.project-menu form button { height: 30px; border: 1px solid #4a5b69; border-radius: 5px; padding: 0 10px; background: #111b24; color: #cbd4dc; font-size: 10px; cursor: pointer; }
+.project-menu form button:disabled { opacity: .4; cursor: default; }
 .model-picker { position: relative; padding-right: 8px; }
 .model-trigger, .permission-trigger { width: 100%; min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; padding: 0; background: transparent; text-align: left; cursor: pointer; }
 .model-trigger > span, .permission-trigger > span { flex: 1; }
@@ -182,6 +202,40 @@ main { min-width: 0; display: grid; grid-template-rows: auto minmax(230px, 1fr) 
 .audit-box { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 5px; padding: 12px; color: var(--green); }
 .audit-box strong { display: block; font-size: 10px; }
 .audit-box small { display: block; max-width: 210px; margin-top: 6px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font: 8px var(--mono); }
+.git-section { display: grid; gap: 10px; }
+.git-heading { display: flex; align-items: center; justify-content: space-between; }
+.git-heading h3 { margin: 0; }
+.git-heading > span { display: flex; align-items: center; gap: 4px; font-size: 9px; }
+.git-heading > span svg { width: 10px; }
+.git-heading .dirty { color: var(--amber); }
+.git-heading .clean { color: var(--green); }
+.git-branch { min-width: 0; display: grid; grid-template-columns: 17px minmax(0, auto); gap: 2px 6px; align-items: center; border: 1px solid var(--border); border-radius: 5px; padding: 9px; }
+.git-branch svg { width: 14px; grid-row: span 2; color: #b8c4ce; }
+.git-branch strong, .git-branch small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-branch strong { font: 10px var(--mono); }
+.git-branch small { color: var(--muted); font: 8px var(--mono); }
+.git-sync { display: flex; gap: 8px; color: #9fbbd5; font: 9px var(--mono); }
+.git-files { max-height: 190px; overflow: auto; display: grid; gap: 3px; scrollbar-width: thin; }
+.git-files > div { min-width: 0; display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 5px; align-items: center; padding: 4px 5px; border-radius: 4px; background: rgba(255,255,255,.025); }
+.git-files > div > span { display: grid; place-items: center; color: var(--amber); font: 9px var(--mono); }
+.git-files > div > span.staged { color: var(--green); }
+.git-files > div > span svg { width: 10px; }
+.git-files code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbd5dd; font: 9px var(--mono); }
+.git-files small, .git-files p { color: var(--muted); font-size: 8px; }
+.git-diff { border: 1px solid var(--border); border-radius: 5px; overflow: hidden; }
+.git-diff summary { display: flex; align-items: center; gap: 6px; padding: 7px 9px; color: #b8c4ce; font-size: 9px; cursor: pointer; }
+.git-diff summary svg { width: 12px; }
+.git-diff pre { max-height: 240px; margin: 0; overflow: auto; border-top: 1px solid var(--border); padding: 8px; background: #091017; color: #b8c8d5; font: 8px/1.5 var(--mono); white-space: pre; }
+.commit-message { display: grid; gap: 5px; color: var(--muted); font-size: 8px; }
+.commit-message input { width: 100%; height: 31px; border: 1px solid var(--border); border-radius: 5px; outline: 0; padding: 0 8px; background: #101820; color: var(--text); font-size: 9px; }
+.commit-message input:focus { border-color: #57789b; }
+.git-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.git-actions button { height: 32px; display: flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid #465765; border-radius: 5px; background: #101820; color: #cbd3da; font-size: 9px; cursor: pointer; }
+.git-actions button:first-child { border-color: #47734e; color: #7ee994; }
+.git-actions button svg { width: 13px; }
+.git-actions button:disabled { opacity: .35; cursor: default; }
+.git-empty { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.git-empty svg { width: 13px; }
 .error-banner { position: fixed; z-index: 10; top: 61px; left: 50%; transform: translateX(-50%); display: flex; gap: 18px; align-items: center; max-width: 560px; border: 1px solid #864747; border-radius: 5px; padding: 8px 12px; background: #341c20; color: #ffb6b6; font-size: 11px; }
 .error-banner button { border: 0; background: transparent; color: inherit; cursor: pointer; }
 .loading { height: 100%; display: grid; place-content: center; justify-items: center; gap: 15px; color: var(--muted); }
@@ -203,11 +257,12 @@ main { min-width: 0; display: grid; grid-template-rows: auto minmax(230px, 1fr) 
 }
 @media (max-width: 720px) {
   html, body, #root { overflow: auto; }
-  .topbar { position: sticky; top: 0; z-index: 5; grid-template-columns: 48px 1fr 1fr; height: 52px; }
+  .topbar { position: sticky; top: 0; z-index: 5; grid-template-columns: 48px 1.15fr 1fr 1fr; height: 52px; }
   .topbar > .top-item { display: none; }
   .brand { justify-content: center; padding: 0; }
   .brand strong { display: none; }
-  .topbar > .model-picker, .topbar > .permission-picker { display: flex; padding: 0 8px; border-left: 1px solid var(--border); }
+  .topbar > .project-picker, .topbar > .model-picker, .topbar > .permission-picker { display: flex; padding: 0 8px; border-left: 1px solid var(--border); }
+  .project-menu { position: fixed; top: 58px; left: 8px; width: min(520px, calc(100vw - 16px)); }
   .model-menu { position: fixed; top: 58px; left: 8px; width: min(380px, calc(100vw - 16px)); }
   .permission-menu { position: fixed; top: 58px; right: 8px; width: min(410px, calc(100vw - 16px)); }
   .workspace { display: block; height: auto; }

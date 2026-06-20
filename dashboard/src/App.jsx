@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Box, BrainCircuit, Check, ChevronDown, Cpu, Eye, Globe2, Hand, HardDrive, Search, Shield, ShieldAlert, Sparkles } from 'lucide-react';
-import { cancelTask, getFile, getState, resetContext, startTask, undoRun } from './api.js';
+import { Bot, Box, BrainCircuit, Check, ChevronDown, Cpu, Eye, FolderGit2, FolderPlus, Globe2, Hand, Search, Shield, ShieldAlert, Sparkles } from 'lucide-react';
+import { cancelTask, commitChanges, getFile, getGitState, getState, pushChanges, resetContext, selectProject, startTask, undoRun } from './api.js';
 import { ProjectTree } from './components/ProjectTree.jsx';
 import { Timeline } from './components/Timeline.jsx';
 import { DiffViewer } from './components/DiffViewer.jsx';
@@ -9,6 +9,7 @@ import { Composer } from './components/Composer.jsx';
 
 export function App() {
   const [state, setState] = useState(null);
+  const [git, setGit] = useState(null);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState('agent.js');
@@ -22,14 +23,22 @@ export function App() {
   const refresh = useCallback(async () => {
     try { setState(await getState()); setError(''); } catch (cause) { setError(cause.message); }
   }, []);
+  const refreshGit = useCallback(async () => {
+    try { setGit(await getGitState()); } catch (cause) { setError(cause.message); }
+  }, []);
   useEffect(() => {
-    refresh();
+    Promise.all([refresh(), refreshGit()]);
     const events = new EventSource('/api/events');
     let refreshTimer;
-    events.onmessage = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 80); };
+    events.onmessage = event => {
+      let type = '';
+      try { type = JSON.parse(event.data).type; } catch { /* ignore malformed events */ }
+      if (type === 'git-changed' || type === 'project-changed') refreshGit();
+      clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 80);
+    };
     const fallback = setInterval(refresh, 10000);
     return () => { clearTimeout(refreshTimer); clearInterval(fallback); events.close(); };
-  }, [refresh]);
+  }, [refresh, refreshGit]);
   useEffect(() => {
     if (!state || modeInitialized.current) return;
     setMode(state.config?.permissionMode || 'ask');
@@ -67,18 +76,54 @@ export function App() {
     if (!window.confirm('Очистить сохранённый контекст этого проекта и начать новый диалог?')) return;
     try { await resetContext(); await refresh(); } catch (cause) { setError(cause.message); }
   };
+  const changeProject = async projectPath => {
+    try {
+      await selectProject(projectPath);
+      setSelected(''); setContent(''); setQuery(''); setGit(null); modeInitialized.current = false;
+      await Promise.all([refresh(), refreshGit()]);
+    } catch (cause) { setError(cause.message); }
+  };
+  const commit = async message => {
+    if (!window.confirm(`Создать коммит со всеми изменениями проекта?\n\n${message}`)) return false;
+    try { await commitChanges(message, true); await refreshGit(); return true; } catch (cause) { setError(cause.message); return false; }
+  };
+  const push = async () => {
+    if (!window.confirm(`Отправить ветку ${git?.branch || ''} в ${git?.upstream || 'origin'}?`)) return;
+    try { await pushChanges(true); await refreshGit(); return true; } catch (cause) { setError(cause.message); return false; }
+  };
 
   if (!state) return <div className="loading"><Bot/> <span>{error || 'Загрузка Agent Studio…'}</span></div>;
   const activeDiff = diffRun?.diffs?.[0] || null;
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><Bot size={18}/><strong>DeepSeek Agent Studio</strong></div><TopItem icon={<HardDrive/>} label="Рабочая папка" value={state.workspace}/><ModelMenu models={models.length ? models : [{id:'deepseek-chat'}]} value={model} onChange={setModel}/><PermissionMenu value={mode} onChange={setMode}/><TopItem icon={<Box className={state.api.online ? 'online-icon' : 'offline-icon'}/>} label="Подключение" value={state.api.online ? state.api.baseUrl : 'Нет соединения'}/></header>
+    <header className="topbar"><div className="brand"><Bot size={18}/><strong>DeepSeek Agent Studio</strong></div><ProjectMenu workspace={state.workspace} projects={state.projects || []} onSelect={changeProject}/><ModelMenu models={models.length ? models : [{id:'deepseek-chat'}]} value={model} onChange={setModel}/><PermissionMenu value={mode} onChange={setMode}/><TopItem icon={<Box className={state.api.online ? 'online-icon' : 'offline-icon'}/>} label="Подключение" value={state.api.online ? state.api.baseUrl : 'Нет соединения'}/></header>
     {error ? <div className="error-banner">{error}<button onClick={() => setError('')}>×</button></div> : null}
-    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(undoableRun)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} onCancel={cancel} onResetContext={startNewDialog} running={running} cancelling={cancelling} historyEnabled={state.conversation?.enabled !== false} exchanges={state.conversation?.exchanges || 0}/></main><Insights project={state.project} latestRun={latestRun} api={state.api}/></div>
+    <div className="workspace"><ProjectTree files={state.project.files} selected={selected} query={query} onQuery={setQuery} onSelect={setSelected}/><main><Timeline task={state.task} latestRun={latestRun}/><DiffViewer file={activeDiff?.path || selected} content={content} diff={activeDiff} onUndo={undo} canUndo={Boolean(undoableRun)}/><Composer value={prompt} onChange={setPrompt} onSubmit={submit} onCancel={cancel} onResetContext={startNewDialog} running={running} cancelling={cancelling} historyEnabled={state.conversation?.enabled !== false} exchanges={state.conversation?.exchanges || 0}/></main><Insights project={state.project} latestRun={latestRun} api={state.api} git={git} onCommit={commit} onPush={push} disabled={running}/></div>
     {pendingApproval ? <div className="modal-backdrop" role="presentation"><section className="approval-modal" role="dialog" aria-modal="true" aria-labelledby="approval-title"><ShieldAlert size={24}/><h2 id="approval-title">Разрешить изменения задачи?</h2><p>Agent получит режим full только для этого запуска. Все файловые изменения попадут в транзакцию и смогут быть откатаны.</p><pre>{prompt}</pre><div><button onClick={() => setPendingApproval(false)}>Отмена</button><button className="approve" onClick={() => executeTask(true)}>Подтвердить и запустить</button></div></section></div> : null}
   </div>;
 }
 
 function TopItem({ icon, label, value }) { return <div className="top-item">{icon}<span><small>{label}</small><strong title={value}>{value}</strong></span></div>; }
+
+function ProjectMenu({ workspace, projects, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const [pathValue, setPathValue] = useState('');
+  const root = useRef(null);
+  useEffect(() => {
+    const close = event => { if (event.key === 'Escape' || (event.type === 'pointerdown' && !root.current?.contains(event.target))) setOpen(false); };
+    document.addEventListener('keydown', close); document.addEventListener('pointerdown', close);
+    return () => { document.removeEventListener('keydown', close); document.removeEventListener('pointerdown', close); };
+  }, []);
+  const choose = async projectPath => { await onSelect(projectPath); setOpen(false); setPathValue(''); };
+  return <div className="top-item project-picker" ref={root}>
+    <FolderGit2/>
+    <button type="button" className="project-trigger" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen(value => !value)}><span><small>Рабочая папка</small><strong title={workspace}>{workspace}</strong></span><ChevronDown className={open ? 'rotated' : ''}/></button>
+    {open ? <div className="project-menu" role="menu" aria-label="Проекты">
+      <h3>Недавние проекты</h3>
+      {projects.map(project => <button type="button" role="menuitemradio" aria-checked={project.active} key={project.path} onClick={() => choose(project.path)}><FolderGit2/><span><strong>{project.name}</strong><small>{project.path}</small></span>{project.active ? <Check/> : null}</button>)}
+      <form onSubmit={event => { event.preventDefault(); if (pathValue.trim()) choose(pathValue.trim()); }}><FolderPlus/><input aria-label="Путь к проекту" value={pathValue} onChange={event => setPathValue(event.target.value)} placeholder="C:\\путь\\к\\проекту"/><button type="submit" disabled={!pathValue.trim()}>Добавить</button></form>
+    </div> : null}
+  </div>;
+}
 
 function modelMeta(id) {
   if (id.includes('search')) return { group: 'С поиском', description: 'Ответы с поиском актуальной информации', icon: Globe2 };

@@ -6,6 +6,8 @@ const { spawn } = require('child_process');
 const core = require('./lib/agent-core.js');
 const projectIndex = require('./lib/project-index.js');
 const { createLogger, attachRequestLog } = require('./lib/logger.js');
+const gitService = require('./lib/git-service.js');
+const projectRegistry = require('./lib/project-registry.js');
 
 function parseArgs(argv) {
   const options = { workspace: process.cwd(), port: 9660 };
@@ -126,13 +128,15 @@ function mimeType(file) {
 }
 
 function createStudioServer(options) {
-  const workspace = fs.realpathSync(options.workspace);
-  const config = core.loadProjectConfig(workspace);
+  let workspace = projectRegistry.validateProject(options.workspace);
+  let config = core.loadProjectConfig(workspace);
   const dist = path.join(__dirname, 'dashboard', 'dist');
   const apiBaseUrl = String(process.env.DEEPSEEK_API_URL || 'http://127.0.0.1:9655').replace(/\/+$/, '');
   const apiHeaders = process.env.FREEDEEPSEEK_API_KEY ? { Authorization: `Bearer ${process.env.FREEDEEPSEEK_API_KEY}` } : {};
-  const sessionId = core.workspaceSessionId(workspace);
+  let sessionId = core.workspaceSessionId(workspace);
   const logger = options.logger || createLogger({ service: 'deepseek-agent-studio' });
+  const registryFile = options.registryFile || projectRegistry.defaultRegistryPath();
+  let projects = projectRegistry.addProject(projectRegistry.readProjects(registryFile), workspace, registryFile);
   let task = null;
   let activeChild = null;
   const eventClients = new Set();
@@ -148,6 +152,7 @@ function createStudioServer(options) {
     ]);
     return {
       workspace,
+      projects: projectRegistry.describeProjects(projects, workspace),
       config: { permissionMode: config.permissionMode, historyEnabled: config.historyEnabled },
       project: projectIndex.createProjectIndex(workspace, config),
       runs: loadRuns(workspace),
@@ -155,6 +160,18 @@ function createStudioServer(options) {
       conversation: { sessionId, exchanges: core.loadConversation(workspace, config).length, enabled: config.historyEnabled },
       api: { online: Boolean(health), baseUrl: apiBaseUrl, health, models: models?.data || [] },
     };
+  };
+
+  const selectProject = projectPath => {
+    if (activeChild || ['running', 'cancelling'].includes(task?.status)) throw new Error('Нельзя переключить проект во время выполнения задачи');
+    const next = projectRegistry.validateProject(projectPath);
+    projects = projectRegistry.addProject(projects, next, registryFile);
+    workspace = next;
+    config = core.loadProjectConfig(workspace);
+    sessionId = core.workspaceSessionId(workspace);
+    task = null;
+    publish('project-changed', { workspace });
+    return { workspace, projects: projectRegistry.describeProjects(projects, workspace) };
   };
 
   const startTask = body => {
@@ -224,12 +241,30 @@ function createStudioServer(options) {
         return;
       }
       if (req.method === 'GET' && url.pathname === '/api/state') return json(res, 200, await state());
+      if (req.method === 'GET' && url.pathname === '/api/git') return json(res, 200, gitService.getGitState(workspace));
       if (req.method === 'GET' && url.pathname === '/api/file') {
         const file = core.resolveWorkspacePath(workspace, url.searchParams.get('path') || '');
         core.assertAccessible(workspace, file, config, 'studio-read');
         return json(res, 200, { path: core.normalizeRelative(workspace, file), content: readStudioFile(file, config.maxFileBytes) });
       }
       if (req.method === 'POST' && url.pathname === '/api/tasks') return json(res, 202, startTask(await readJson(req)));
+      if (req.method === 'POST' && url.pathname === '/api/projects') return json(res, 200, selectProject((await readJson(req)).path));
+      if (req.method === 'POST' && url.pathname === '/api/git/commit') {
+        if (activeChild || ['running', 'cancelling'].includes(task?.status)) throw new Error('Нельзя создать коммит во время выполнения задачи');
+        const body = await readJson(req);
+        if (body.confirmed !== true) throw new Error('Для коммита требуется явное подтверждение');
+        const result = gitService.commitAll(workspace, body.message);
+        publish('git-changed', { action: 'commit', hash: result.hash });
+        return json(res, 200, result);
+      }
+      if (req.method === 'POST' && url.pathname === '/api/git/push') {
+        if (activeChild || ['running', 'cancelling'].includes(task?.status)) throw new Error('Нельзя выполнить push во время выполнения задачи');
+        const body = await readJson(req);
+        if (body.confirmed !== true) throw new Error('Для push требуется явное подтверждение');
+        const result = gitService.pushCurrent(workspace);
+        publish('git-changed', { action: 'push', branch: result.branch });
+        return json(res, 200, result);
+      }
       if (req.method === 'POST' && url.pathname === '/api/tasks/cancel') return json(res, 202, cancelTask());
       if (req.method === 'POST' && url.pathname === '/api/undo') return json(res, 200, core.undoLatestRun(workspace));
       if (req.method === 'POST' && url.pathname === '/api/session/reset') {

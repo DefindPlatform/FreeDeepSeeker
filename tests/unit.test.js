@@ -17,6 +17,8 @@ const { createSessionStore } = require('../lib/session-store.js');
 const { createHttpGuard } = require('../lib/http-guard.js');
 const { createLogger, redact, attachRequestLog } = require('../lib/logger.js');
 const { EventEmitter } = require('node:events');
+const gitService = require('../lib/git-service.js');
+const projectRegistry = require('../lib/project-registry.js');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'fdsapi-test-'));
@@ -66,6 +68,49 @@ test('request logging propagates a safe correlation id', () => {
   assert.equal(res.headers['X-Request-Id'], 'test-123');
   assert.equal(events[0].fields.path, '/health');
   assert.equal(events[0].fields.durationMs, 0);
+});
+
+test('Git service reports, commits and pushes a workspace safely', () => {
+  const root = tmpdir();
+  const remoteParent = tmpdir();
+  const remote = path.join(remoteParent, 'remote.git');
+  const git = args => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true });
+  assert.equal(git(['init']).status, 0);
+  assert.equal(git(['config', 'user.email', 'tests@example.invalid']).status, 0);
+  assert.equal(git(['config', 'user.name', 'FreeDeepSeeker Tests']).status, 0);
+  fs.writeFileSync(path.join(root, 'README.md'), '# initial\n');
+  assert.equal(git(['add', 'README.md']).status, 0);
+  assert.equal(git(['commit', '-m', 'Initial']).status, 0);
+  fs.appendFileSync(path.join(root, 'README.md'), 'changed\n');
+  fs.writeFileSync(path.join(root, 'new.js'), 'module.exports = true;\n');
+  const dirty = gitService.getGitState(root);
+  assert.equal(dirty.repository, true);
+  assert.equal(dirty.dirty, true);
+  assert.equal(dirty.files.length, 2);
+  assert.match(dirty.diff, /changed/);
+  const committed = gitService.commitAll(root, 'Test safe commit');
+  assert.match(committed.hash, /^[0-9a-f]+$/);
+  assert.equal(gitService.getGitState(root).dirty, false);
+  assert.equal(spawnSync('git', ['init', '--bare', remote], { encoding: 'utf8', windowsHide: true }).status, 0);
+  assert.equal(git(['remote', 'add', 'origin', remote]).status, 0);
+  const pushed = gitService.pushCurrent(root);
+  assert.match(pushed.upstream, /^origin\//);
+  assert.throws(() => gitService.commitAll(root, 'bad\nmessage'), /одной строке/);
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(remoteParent, { recursive: true, force: true });
+});
+
+test('project registry validates, deduplicates and describes workspaces', () => {
+  const root = tmpdir();
+  const second = tmpdir();
+  const registryFile = path.join(tmpdir(), 'projects.json');
+  let projects = projectRegistry.addProject([], root, registryFile);
+  projects = projectRegistry.addProject(projects, second, registryFile);
+  projects = projectRegistry.addProject(projects, root, registryFile);
+  assert.deepEqual(projects, [fs.realpathSync(root), fs.realpathSync(second)]);
+  assert.deepEqual(projectRegistry.readProjects(registryFile), projects);
+  assert.equal(projectRegistry.describeProjects(projects, projects[0])[0].active, true);
+  assert.throws(() => projectRegistry.validateProject(path.join(root, 'missing')), /не найдена/);
 });
 
 test('session store bounds history and resets one or all sessions', () => {
