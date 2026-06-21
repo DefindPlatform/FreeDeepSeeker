@@ -81,3 +81,6 @@ release/
 
 # Retired internal UI mockups; keep product assets in dashboard/public instead
 docs/design/
+
+# Local planning documents; useful during development, not published to GitHub
+docs/roadmap-*.md
