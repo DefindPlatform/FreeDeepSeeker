@@ -4,6 +4,9 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 
 ## Unreleased
 
+- Added dependency-aware persistent task plans, validated tool arguments, runtime wall-clock budgets, stable runtime errors, and richer run metrics.
+- Hardened durable project memory with explicit corruption detection, size limits, statistics, and optimistic revisions.
+
 - Added remembered multi-project switching to Agent Studio.
 - Added a guarded Git panel with status, bounded diff, commit and push flows.
 - Extended Studio browser coverage across desktop and mobile viewports.

@@ -13,6 +13,7 @@ const agentCore = require('../lib/agent-core.js');
 const { ToolRegistry, createCodingToolRegistry } = require('../lib/tool-registry.js');
 const { AgentRunController, toolSignature } = require('../lib/agent-runtime.js');
 const projectMemory = require('../lib/project-memory.js');
+const taskPlan = require('../lib/task-plan.js');
 const projectIndex = require('../lib/project-index.js');
 const studio = require('../studio-server.js');
 const { loadServerConfig } = require('../lib/server-config.js');
@@ -348,11 +349,15 @@ test('coding agent parses runtime budgets, dry-run and report output', () => {
 
 test('tool registry exposes provider schemas and permission kinds', () => {
   const registry = createCodingToolRegistry();
-  assert.equal(registry.names().length, 11);
+  assert.equal(registry.names().length, 14);
   assert.equal(registry.kind('read_file'), 'read');
   assert.equal(registry.kind('write_file'), 'write');
   assert.equal(registry.kind('run_command'), 'command');
   assert.equal(registry.schemas()[0].kind, undefined);
+  assert.equal(registry.describe().find(tool => tool.name === 'run_command').kind, 'command');
+  assert.throws(() => registry.validate('read_file', {}), /path.*обязателен/i);
+  assert.throws(() => registry.validate('update_task', { id: 'A', state: 'unknown' }), /неподдерживаемое/i);
+  assert.deepEqual(registry.validate('read_file', { path: 'README.md' }), { path: 'README.md' });
   assert.throws(() => new ToolRegistry([{ kind: 'magic', type: 'function', function: { name: 'bad', parameters: { type: 'object' } } }]), /unknown|неизвестный/i);
 });
 
@@ -421,6 +426,72 @@ test('agent runtime enforces budgets, detects loops and records a report', () =>
   assert.equal(report.toolCalls, 2);
   assert.equal(report.usage.prompt_tokens, 10);
   assert.equal(toolSignature('x', { b: 1, a: 2 }), toolSignature('x', { a: 2, b: 1 }));
+});
+
+test('agent runtime enforces cancellation and wall-clock budgets with metrics', () => {
+  let now = 1000;
+  const runtime = new AgentRunController({ maxDurationMs: 1000, clock: () => now });
+  runtime.start();
+  runtime.beginStep();
+  runtime.acceptToolCall('read_file', { path: 'a.js' });
+  runtime.recordToolResult('read_file', { path: 'a.js' }, { ok: false, denied: true }, 'read');
+  now = 2000;
+  assert.throws(() => runtime.beginStep(), error => error.code === 'DURATION_LIMIT' && /разбейте задачу/i.test(error.recovery));
+  runtime.finish('failed', 'duration');
+  assert.deepEqual(runtime.toJSON().metrics, {
+    durationMs: 1000, failedToolCalls: 1, deniedToolCalls: 1,
+    toolCallsByKind: { read: 1, write: 0, command: 0 },
+  });
+  const cancelled = new AgentRunController();
+  cancelled.start();
+  assert.throws(() => cancelled.beginStep({ aborted: true }), error => error.code === 'RUN_CANCELLED');
+});
+
+test('task plan validates dependencies, transitions and optimistic revisions', () => {
+  const root = tmpdir();
+  const plan = taskPlan.saveTaskPlan(root, {
+    goal: 'Ship safely',
+    tasks: [
+      { id: 'inspect', title: 'Inspect project' },
+      { id: 'change', title: 'Make change', dependsOn: ['inspect'] },
+    ],
+  }, { expectedRevision: 0 });
+  assert.equal(plan.revision, 1);
+  assert.deepEqual(taskPlan.readyTasks(plan).map(task => task.id), ['inspect']);
+  assert.throws(() => taskPlan.updateTask(root, 'change', 'in_progress'), /зависимост/i);
+  taskPlan.updateTask(root, 'inspect', 'in_progress');
+  const completed = taskPlan.updateTask(root, 'inspect', 'completed');
+  assert.deepEqual(completed.ready.map(task => task.id), ['change']);
+  assert.equal(completed.progress.percent, 50);
+  assert.throws(() => taskPlan.updateTask(root, 'change', 'in_progress', '', { expectedRevision: 1 }), /конфликт версии/i);
+  assert.throws(() => taskPlan.normalizePlan({ tasks: [
+    { id: 'a', title: 'A', dependsOn: ['b'] }, { id: 'b', title: 'B', dependsOn: ['a'] },
+  ] }), /циклическая/i);
+});
+
+test('task-plan tools respect dry-run and transaction rollback', async () => {
+  const root = tmpdir();
+  const config = agentCore.loadProjectConfig(root);
+  config.permissionMode = 'full';
+  const transaction = new agentCore.RunTransaction(root, 'plan rollback');
+  const args = { goal: 'Test', tasks: [{ id: 'one', title: 'First' }] };
+  const preview = await agentInternals.executeTool('set_task_plan', args, { root, config, transaction, dryRun: true });
+  assert.equal(preview.dry_run, true);
+  assert.equal(taskPlan.loadTaskPlan(root), null);
+  const saved = await agentInternals.executeTool('set_task_plan', args, { root, config, transaction });
+  assert.equal(saved.progress.total, 1);
+  transaction.finish('failed', 'simulated');
+  transaction.rollback('undone');
+  assert.equal(taskPlan.loadTaskPlan(root), null);
+});
+
+test('project memory detects corruption and revision conflicts', () => {
+  const root = tmpdir();
+  projectMemory.rememberProjectMemory(root, { key: 'rule', value: 'Test before release', type: 'constraint' });
+  assert.equal(projectMemory.memoryStats(root).revision, 1);
+  assert.throws(() => projectMemory.rememberProjectMemory(root, { key: 'next', value: 'Ship', type: 'todo' }, { expectedRevision: 0 }), /конфликт версии/i);
+  fs.writeFileSync(projectMemory.memoryPath(root), '{broken');
+  assert.throws(() => projectMemory.loadProjectMemory(root), /некорректная память/i);
 });
 
 test('coding agent dry-run validates but does not mutate files or launch commands', async () => {
@@ -593,6 +664,18 @@ test('coding agent can disable, expire and tighten saved conversation history', 
   assert.deepEqual(agentCore.loadConversation(root, { historyTtlDays: 1 }), []);
   for (let i = 0; i < 5; i++) agentCore.saveConversationExchange(root, `request ${i}`, `answer ${i}`, { maxConversationExchanges: 2 });
   assert.equal(agentCore.loadConversation(root).length, 2);
+});
+
+test('coding agent ranks relevant conversation within a strict context budget', () => {
+  const exchanges = [
+    { user: 'Discuss CSS colors', assistant: 'Use blue and green' },
+    { user: 'Fix authentication token refresh', assistant: 'The refresh code is in auth.js' },
+    { user: 'Unrelated release note', assistant: 'Update changelog' },
+  ];
+  const selected = agentCore.selectConversationContext(exchanges, 'Continue authentication refresh', 1000);
+  assert.deepEqual(selected, exchanges);
+  const tight = agentCore.selectConversationContext(exchanges, 'Continue authentication refresh', 80);
+  assert.deepEqual(tight.map(item => item.user), ['Fix authentication token refresh']);
 });
 
 test('coding agent can recover mutations from a failed run', () => {

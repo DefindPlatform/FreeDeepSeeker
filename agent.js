@@ -9,6 +9,7 @@ const projectIndex = require('./lib/project-index.js');
 const { createCodingToolRegistry } = require('./lib/tool-registry.js');
 const { AgentRunController } = require('./lib/agent-runtime.js');
 const projectMemory = require('./lib/project-memory.js');
+const taskPlan = require('./lib/task-plan.js');
 
 const DEFAULT_URL = process.env.DEEPSEEK_API_URL || 'http://localhost:9655';
 const DEFAULT_MODEL = process.env.DEEPSEEK_AGENT_MODEL || 'deepseek-chat';
@@ -24,7 +25,7 @@ function parseArgs(argv) {
   const options = {
     workspace: process.cwd(), url: DEFAULT_URL, model: DEFAULT_MODEL,
     yes: false, mode: '', undo: false, init: false, allowHome: false, projectMap: false, json: false, newSession: false, noHistory: false,
-    dryRun: false, report: '', maxSteps: 25, maxToolCalls: 100, help: false, prompt: '',
+    dryRun: false, report: '', maxSteps: 25, maxToolCalls: 100, maxDurationMs: 0, help: false, prompt: '',
   };
   const positional = [];
   for (let i = 0; i < argv.length; i++) {
@@ -41,6 +42,7 @@ function parseArgs(argv) {
     else if (name === '--model' || name === '-m') options.model = value();
     else if (name === '--max-steps') options.maxSteps = Number(value());
     else if (name === '--max-tool-calls') options.maxToolCalls = Number(value());
+    else if (name === '--max-duration-ms') options.maxDurationMs = Number(value());
     else if (name === '--yes' || name === '-y') options.yes = true;
     else if (name === '--mode') options.mode = value();
     else if (name === '--undo') options.undo = true;
@@ -67,6 +69,9 @@ function parseArgs(argv) {
   }
   if (!Number.isInteger(options.maxToolCalls) || options.maxToolCalls < 1 || options.maxToolCalls > 1000) {
     throw new Error('--max-tool-calls должен быть целым числом от 1 до 1000');
+  }
+  if (options.maxDurationMs && (!Number.isInteger(options.maxDurationMs) || options.maxDurationMs < 1000 || options.maxDurationMs > 86400000)) {
+    throw new Error('--max-duration-ms должен быть целым числом от 1000 до 86400000');
   }
   return options;
 }
@@ -97,6 +102,7 @@ ${c.bold('DeepSeek Coding Agent')}
       --report <path>    сохранить структурированный JSON-отчёт запуска
       --max-steps <n>    максимум вызовов модели (25)
       --max-tool-calls <n> максимум вызовов инструментов (100)
+      --max-duration-ms <n> общий лимит времени запуска
       --url <url>        адрес FreeDeepseekAPI
   -h, --help             справка
 
@@ -221,9 +227,32 @@ function printChangePreview(before, after) {
 
 async function executeTool(name, args, context) {
   const { root, config, transaction } = context;
+  if (name === 'get_task_plan') {
+    const plan = taskPlan.loadTaskPlan(root);
+    return { plan, progress: taskPlan.progress(plan), ready: plan ? taskPlan.readyTasks(plan) : [] };
+  }
+  if (name === 'set_task_plan') {
+    const candidate = taskPlan.normalizePlan({ goal: args.goal, tasks: args.tasks });
+    if (context.dryRun) return { ok: true, dry_run: true, action: 'set_task_plan', plan: candidate };
+    if (!await authorizeMutation(context, `Сохранить план из ${candidate.tasks.length} задач?`)) return { ok: false, denied: true, mode: config.permissionMode };
+    const target = taskPlan.planPath(root);
+    transaction.before(target);
+    const plan = taskPlan.saveTaskPlan(root, candidate, { expectedRevision: args.expected_revision });
+    transaction.after(target);
+    return { ok: true, plan, progress: taskPlan.progress(plan), ready: taskPlan.readyTasks(plan) };
+  }
+  if (name === 'update_task') {
+    if (context.dryRun) return { ok: true, dry_run: true, action: 'update_task', id: args.id, state: args.state };
+    if (!await authorizeMutation(context, `Перевести задачу ${args.id} в ${args.state}?`)) return { ok: false, denied: true, mode: config.permissionMode };
+    const target = taskPlan.planPath(root);
+    transaction.before(target);
+    const result = taskPlan.updateTask(root, args.id, args.state, args.note, { expectedRevision: args.expected_revision });
+    transaction.after(target);
+    return { ok: true, ...result };
+  }
   if (name === 'get_project_memory') {
-    const entries = projectMemory.loadProjectMemory(root);
-    return { entries: args.type ? entries.filter(item => item.type === args.type) : entries };
+    const state = projectMemory.loadProjectMemoryState(root);
+    return { revision: state.revision, entries: args.type ? state.entries.filter(item => item.type === args.type) : state.entries };
   }
   if (name === 'remember_project_memory') {
     const entry = projectMemory.normalizeEntry(args);
@@ -231,7 +260,7 @@ async function executeTool(name, args, context) {
     if (!await authorizeMutation(context, `Запомнить для проекта ${entry.key}?`)) return { ok: false, denied: true, mode: config.permissionMode };
     const target = projectMemory.memoryPath(root);
     transaction.before(target);
-    const saved = projectMemory.rememberProjectMemory(root, entry);
+    const saved = projectMemory.rememberProjectMemory(root, entry, { expectedRevision: args.expected_revision });
     transaction.after(target);
     return { ok: true, entry: saved };
   }
@@ -241,7 +270,7 @@ async function executeTool(name, args, context) {
     if (!await authorizeMutation(context, `Удалить память проекта ${key}?`)) return { ok: false, denied: true, mode: config.permissionMode };
     const target = projectMemory.memoryPath(root);
     transaction.before(target);
-    const deleted = projectMemory.forgetProjectMemory(root, key);
+    const deleted = projectMemory.forgetProjectMemory(root, key, { expectedRevision: args.expected_revision });
     transaction.after(target);
     return { ok: true, key, deleted };
   }
@@ -398,6 +427,7 @@ async function runAgent(task, options, rl) {
   const runtime = new AgentRunController({
     runId: transaction.id, task, model: options.model, workspace: root, dryRun: options.dryRun,
     maxSteps: options.maxSteps, maxToolCalls: options.maxToolCalls,
+    maxDurationMs: options.maxDurationMs || options.config.maxRunDurationMs,
   });
   runtime.start();
   let cancellationStarted = false;
@@ -422,7 +452,9 @@ async function runAgent(task, options, rl) {
     const sessionState = await sessionResponse.json();
     remoteHasContext = sessionState.agents?.some(item => item.agent === session);
   } catch {}
-  const previous = remoteHasContext ? [] : core.loadConversation(root, options.config);
+  const previous = remoteHasContext ? [] : core.selectConversationContext(
+    core.loadConversation(root, options.config), task, options.config.maxConversationChars,
+  );
   const memory = projectMemory.loadProjectMemory(root);
   const messages = [
     { role: 'system', content: systemPrompt(root, options.config.permissionMode, index, memory, options.dryRun) },
@@ -468,7 +500,10 @@ async function runAgent(task, options, rl) {
       if (!TOOL_REGISTRY.has(name)) result = { ok: false, error: `Неизвестный инструмент: ${name}` };
       else {
         runtime.acceptToolCall(name, args);
-        try { result = await executeTool(name, args, { root, rl, config: options.config, transaction, dryRun: options.dryRun }); }
+        try {
+          TOOL_REGISTRY.validate(name, args);
+          result = await executeTool(name, args, { root, rl, config: options.config, transaction, dryRun: options.dryRun });
+        }
         catch (error) { result = { ok: false, error: error.message }; }
       }
       runtime.recordToolResult(name, args, result, TOOL_REGISTRY.has(name) ? TOOL_REGISTRY.kind(name) : 'read');
@@ -608,6 +643,7 @@ async function main(argv = process.argv.slice(2)) {
       maxFileBytes: 1000000,
       maxCommandOutputBytes: 100000,
       commandTimeoutMs: 30000,
+      maxRunDurationMs: 900000,
       commandSandbox: 'process',
       dockerImage: 'node:22-alpine',
       sandboxMemoryMb: 512,

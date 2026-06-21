@@ -5,7 +5,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const docFiles = [
   'README.md', 'SECURITY.md', 'CONTRIBUTING.md', '.env.example',
-  'docs/api-documentation.md', 'docs/architecture.md', 'docs/coding-agent.md', 'docs/studio.md', 'docs/browser-auth.md',
+  'docs/api-documentation.md', 'docs/architecture.md', 'docs/coding-agent.md', 'docs/agent-engine.md', 'docs/studio.md', 'docs/browser-auth.md',
 ];
 const docs = Object.fromEntries(docFiles.map(file => [file, fs.readFileSync(path.join(ROOT, file), 'utf8')]));
 const allDocs = Object.values(docs).join('\n');
@@ -57,12 +57,12 @@ for (const route of ['/api/events', '/api/state', '/api/file', '/api/tasks', '/a
   requireText(docs['docs/studio.md'], route, `documented Studio route ${route}`);
 }
 
-for (const option of ['--login', '--no-stream', '--project-map', '--max-steps', '--new-session', '--no-history', '--undo']) {
+for (const option of ['--login', '--no-stream', '--project-map', '--max-steps', '--max-duration-ms', '--new-session', '--no-history', '--undo']) {
   requireText(runtime, option, `implemented option ${option}`);
   requireText(allDocs, option, `documented option ${option}`);
 }
 
-for (const key of ['permissionMode', 'protectedPaths', 'allowedPrograms', 'maxFileBytes', 'maxCommandOutputBytes', 'commandTimeoutMs', 'commandSandbox', 'dockerImage', 'sandboxMemoryMb', 'sandboxCpu', 'sandboxNetwork', 'rollbackOnFailure', 'historyEnabled', 'historyTtlDays', 'maxConversationExchanges', 'maxConversationChars']) {
+for (const key of ['permissionMode', 'protectedPaths', 'allowedPrograms', 'maxFileBytes', 'maxCommandOutputBytes', 'commandTimeoutMs', 'maxRunDurationMs', 'commandSandbox', 'dockerImage', 'sandboxMemoryMb', 'sandboxCpu', 'sandboxNetwork', 'rollbackOnFailure', 'historyEnabled', 'historyTtlDays', 'maxConversationExchanges', 'maxConversationChars']) {
   requireText(source('lib/agent-core.js'), key, `implemented agent config ${key}`);
   requireText(docs['docs/coding-agent.md'], key, `documented agent config ${key}`);
 }

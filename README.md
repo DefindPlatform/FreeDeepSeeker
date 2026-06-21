@@ -203,7 +203,7 @@ npm run client -- -m deepseek-reasoner Реши задачу
 npm run agent -- --help
 npm run agent -- --yes Исправь тесты
 npm run agent -- --mode ask Проверь код на уязвимости
-npm run agent -- --dry-run --report .deepseek-agent/plan.json "Спланируй рефакторинг"
+npm run agent -- --dry-run --report .deepseek-agent/report.json "Спланируй рефакторинг"
 npm run agent -- --undo
 ```
 
@@ -220,6 +220,7 @@ npm run agent -- --undo
 - `--project-map` — вывести карту файлов проекта
 - `--json` — JSON-вывод для `--project-map`
 - `--max-steps` — ограничение числа вызовов модели
+- `--max-duration-ms` — общий лимит времени запуска
 - `--new-session` — очистить сохранённый контекст проекта перед задачей
 
 По умолчанию новые задачи в одной рабочей папке продолжают предыдущий проектный диалог. История хранится локально в `.deepseek-agent/conversation.json`; долговременные решения, ограничения и незавершённые задачи — отдельно в `.deepseek-agent/memory.json`. Команда `/new` начинает новый диалог, но сохраняет знания проекта; `/memory` показывает их. Для разового запуска без чтения и сохранения истории используйте `--no-history`, а для постоянного приватного режима установите `historyEnabled: false` в `.deepseek-agent.json`.
@@ -274,6 +275,7 @@ Proxy поддерживает reasoning и web search для моделей, к
 - `docs/api-documentation.md`
 - `docs/architecture.md`
 - `docs/coding-agent.md`
+- `docs/agent-engine.md`
 - `docs/studio.md`
 - `docs/browser-auth.md`
 
