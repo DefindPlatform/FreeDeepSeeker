@@ -7,6 +7,8 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 - Added remembered multi-project switching to Agent Studio.
 - Added a guarded Git panel with status, bounded diff, commit and push flows.
 - Extended Studio browser coverage across desktop and mobile viewports.
+- Added bounded agent runtime reports and durable, transactional project memory.
+- Hardened repository hygiene and npm package contents.
 
 ## 0.1.0
 

@@ -9,7 +9,10 @@
     "agent.js",
     "studio-server.js",
     "lib/",
-    "scripts/",
+    "scripts/auth.js",
+    "scripts/auth_import.js",
+    "scripts/deepseek_chrome_auth.js",
+    "scripts/doctor.js",
     "chrome-extension/",
     "dashboard/dist/",
     "docs/*.md",
@@ -45,7 +48,7 @@
     "coverage": "node --test --experimental-test-coverage tests/unit.test.js tests/integration.test.js",
     "audit": "npm audit --audit-level=high && npm --prefix dashboard audit --audit-level=high",
     "check": "npm run lint && npm test && npm run studio:build && npm run audit",
-    "test": "node --check server.js && node --check studio-server.js && node --check scripts/auth.js && node --check scripts/auth_import.js && node --check scripts/doctor.js && node --check scripts/deepseek_chrome_auth.js && node --check scripts/probe_deepseek_models.js && node --check scripts/check-docs.js && node --check scripts/check-repository-hygiene.js && node --check scripts/release-check.js && node --check client.js && node --check agent.js && node --check lib/agent-core.js && node --check lib/agent-runtime.js && node --check lib/tool-registry.js && node --check lib/project-memory.js && node --check lib/project-index.js && node --check lib/server-config.js && node --check lib/http-guard.js && node --check lib/session-store.js && node --check lib/api-routes.js && node --check lib/logger.js && node --check lib/git-service.js && node --check lib/project-registry.js && node --check scripts/live_agentic_smoke_tests.mjs && node scripts/check-docs.js && node scripts/check-repository-hygiene.js && node --test tests/unit.test.js tests/integration.test.js",
+    "test": "node --check server.js && node --check studio-server.js && node --check scripts/auth.js && node --check scripts/auth_import.js && node --check scripts/doctor.js && node --check scripts/deepseek_chrome_auth.js && node --check scripts/check-docs.js && node --check scripts/check-repository-hygiene.js && node --check scripts/release-check.js && node --check client.js && node --check agent.js && node --check lib/agent-core.js && node --check lib/agent-runtime.js && node --check lib/tool-registry.js && node --check lib/project-memory.js && node --check lib/project-index.js && node --check lib/server-config.js && node --check lib/http-guard.js && node --check lib/session-store.js && node --check lib/api-routes.js && node --check lib/logger.js && node --check lib/git-service.js && node --check lib/project-registry.js && node --check scripts/live_agentic_smoke_tests.mjs && node scripts/check-docs.js && node scripts/check-repository-hygiene.js && node --test tests/unit.test.js tests/integration.test.js",
     "test:live": "node scripts/live_agentic_smoke_tests.mjs"
   },
   "keywords": [

@@ -25,6 +25,8 @@ const forbidden = files.filter(file => (
   || ((/(^|\/)\.env(?:\..+)?$/i.test(file)) && file !== '.env.example')
   || (/((^|\/)(deepseek-auth|auth|credentials)(?:\.[^/]*)?\.json$)/i.test(file) && file !== 'auth.example.json')
   || /\.(?:log|pid|tmp|temp|session\.json|cookies\.json|har|trace\.zip)$/i.test(file)
+  || /^docs\/roadmap-[^/]+\.md$/i.test(file)
+  || /^scripts\/probe_[^/]+\.js$/i.test(file)
 ));
 
 const problems = [...new Set([...ignored, ...forbidden])].sort();

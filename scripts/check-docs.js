@@ -11,6 +11,24 @@ const docs = Object.fromEntries(docFiles.map(file => [file, fs.readFileSync(path
 const allDocs = Object.values(docs).join('\n');
 const source = file => fs.readFileSync(path.join(ROOT, file), 'utf8');
 
+function markdownFiles(directory) {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) return markdownFiles(full);
+    return entry.isFile() && entry.name.endsWith('.md') ? [full] : [];
+  });
+}
+
+for (const file of [path.join(ROOT, 'README.md'), ...markdownFiles(path.join(ROOT, 'docs'))]) {
+  const text = fs.readFileSync(file, 'utf8');
+  for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+    const href = match[1].trim().replace(/^<|>$/g, '').split(/[?#]/, 1)[0];
+    if (!href || /^(?:https?:|mailto:)/i.test(href)) continue;
+    const target = path.resolve(path.dirname(file), decodeURIComponent(href));
+    if (!fs.existsSync(target)) throw new Error(`Broken documentation link in ${path.relative(ROOT, file)}: ${match[1]}`);
+  }
+}
+
 function requireText(haystack, needle, label = needle) {
   if (!haystack.includes(needle)) throw new Error(`Documentation contract missing: ${label}`);
 }

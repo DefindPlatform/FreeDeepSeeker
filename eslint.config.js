@@ -3,7 +3,7 @@ const globals = require('globals');
 const react = require('eslint-plugin-react');
 
 module.exports = [
-  { ignores: ['node_modules/**', 'dashboard/node_modules/**', 'dashboard/dist/**', 'docs/design/**'] },
+  { ignores: ['node_modules/**', 'dashboard/node_modules/**', 'dashboard/dist/**'] },
   js.configs.recommended,
   {
     files: ['*.js', 'lib/**/*.js', 'scripts/**/*.js', 'tests/**/*.js'],

@@ -274,7 +274,6 @@ Proxy поддерживает reasoning и web search для моделей, к
 - `docs/api-documentation.md`
 - `docs/architecture.md`
 - `docs/coding-agent.md`
-- `docs/roadmap-720.md`
 - `docs/studio.md`
 - `docs/browser-auth.md`
 
