@@ -1,16 +1,83 @@
+# Dependencies and package-manager caches
 node_modules/
-dashboard/dist/
-dashboard/playwright-report/
-dashboard/test-results/
-.env
-*.log
+.pnpm-store/
+.yarn/
+.npm/
+
+# Build output and framework caches
+dist/
+build/
+out/
+.next/
+.nuxt/
+.vite/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# Test and browser automation artifacts
+playwright-report/
+blob-report/
+test-results/
+screenshots/
+traces/
+*.trace.zip
+
+# Environment, credentials and local sessions
+.env*
+!.env.example
 auth.json
 deepseek-auth.json
+*.session.json
+*.cookies.json
+*.har
+
+# DeepSeek runtime state and browser profiles
+.deepseek-agent/
+.deepseek-studio/
 .chrome-profile-deepseek/
 .chrome-for-testing-profile-deepseek/
 .chrome-for-testing-profile-deepseek.stale-*/
-*.session.json
 /tmp/deepseek_response_*
+
+# Logs, process files and temporary output
+*.log
+*.log.*
+*.pid
+*.pid.lock
+*.tmp
+*.temp
+*.bak
+*.swp
+tmp/
+temp/
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.suo
+*.user
+*.code-workspace
 .DS_Store
-.deepseek-agent/
+Thumbs.db
+Desktop.ini
+
+# Python and tool caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.eslintcache
+
+# Local packaging and release artifacts
+*.tgz
+*.zip
 *.pdf
+artifacts/
+release/
+
+# Retired internal UI mockups; keep product assets in dashboard/public instead
+docs/design/
