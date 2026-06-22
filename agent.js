@@ -448,7 +448,7 @@ async function runAgent(task, options, rl) {
   const session = options.sessionId || core.workspaceSessionId(root);
   let remoteHasContext = false;
   try {
-    const sessionResponse = await api.request(`${options.url}/v1/sessions`);
+    const sessionResponse = await api.request(`${options.url}/v1/sessions`, { signal: runtime.createDeadlineSignal() });
     const sessionState = await sessionResponse.json();
     remoteHasContext = sessionState.agents?.some(item => item.agent === session);
   } catch {}
@@ -473,7 +473,9 @@ async function runAgent(task, options, rl) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8', 'x-agent-session': session },
       body: JSON.stringify({ model: options.model, messages, tools: TOOLS, tool_choice: 'auto', stream: false }),
+      signal: runtime.createDeadlineSignal(),
     });
+    runtime.assertActive();
     process.stdout.write(' '.repeat(60) + '\r');
     const json = await response.json();
     runtime.recordUsage(json.usage);

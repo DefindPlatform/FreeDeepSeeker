@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const { spawnSync } = require('child_process');
+const fs = require('fs');
 
 function git(args) {
   return spawnSync('git', args, { encoding: 'utf8', shell: false, windowsHide: true });
@@ -30,6 +31,13 @@ const forbidden = files.filter(file => (
 ));
 
 const problems = [...new Set([...ignored, ...forbidden])].sort();
+const packageManifest = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const packageGlobs = (packageManifest.files || []).filter(entry => ['*', '?', '[', ']', '{', '}'].some(char => entry.includes(char)));
+if (packageGlobs.length) {
+  console.error('Repository hygiene failed. npm files must use an explicit allowlist so ignored local artifacts cannot leak:');
+  packageGlobs.forEach(entry => console.error(`- ${entry}`));
+  process.exit(1);
+}
 if (problems.length) {
   console.error('Repository hygiene failed. Remove generated or sensitive tracked files:');
   problems.forEach(file => console.error(`- ${file}`));

@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Circle, LoaderCircle, Maximize2, Minimize2, TerminalSquare } from 'lucide-react';
+import { Check, Circle, CircleX, LoaderCircle, Maximize2, Minimize2, TerminalSquare } from 'lucide-react';
 
 function statusIcon(status) {
   if (status === 'success') return <Check size={15}/>;
   if (status === 'running') return <LoaderCircle size={16} className="spin"/>;
+  if (status === 'failed') return <CircleX size={15}/>;
   return <Circle size={14}/>;
+}
+
+function fallbackRow(task, latestRun) {
+  const status = task?.status || latestRun?.status || 'idle';
+  if (status === 'completed') return { tool: 'agent', target: 'Задача завершена', ok: true };
+  if (status === 'failed') return { tool: 'agent', target: task?.error || latestRun?.error || 'Запуск завершился с ошибкой', ok: false };
+  if (status === 'cancelled') return { tool: 'agent', target: 'Задача остановлена пользователем', status: 'cancelled' };
+  if (status === 'running' || status === 'cancelling') return { tool: 'agent', target: status === 'cancelling' ? 'Остановка запуска' : 'Ожидание первого инструмента', status: 'running' };
+  return { tool: 'agent', target: 'Задача ещё не запущена', status: 'pending' };
 }
 
 export function Timeline({ task, latestRun }) {
@@ -14,11 +24,7 @@ export function Timeline({ task, latestRun }) {
   const followOutputRef = useRef(true);
   const events = latestRun?.events || [];
   const toolEvents = events.filter(event => event.type === 'tool_result');
-  const fallback = [
-    { tool: 'get_project_map', target: 'Полная карта проекта', ok: true },
-    { tool: 'read_file', target: 'Ожидание задачи', ok: null },
-  ];
-  const rows = toolEvents.length ? toolEvents : fallback;
+  const rows = toolEvents.length ? toolEvents : [fallbackRow(task, latestRun)];
   const output = task?.lines?.map(line => line.text).join('\n') || '';
   const lineCount = task?.lines?.length || 0;
   const running = ['running', 'cancelling'].includes(task?.status);
@@ -32,12 +38,12 @@ export function Timeline({ task, latestRun }) {
     {compact ? <div className="compact-summary"><span><strong>{rows.length}</strong> шагов</span><span><strong>{output ? lineCount : 0}</strong> строк</span>{running ? <span className="status-running">{task?.status === 'cancelling' ? 'останавливается' : 'выполняется'}</span> : null}</div> : null}
     <div className="timeline">
       {rows.map((event, index) => {
-        const running = ['running', 'cancelling'].includes(task?.status) && index === rows.length - 1;
-        const status = running ? 'running' : event.ok === true ? 'success' : 'pending';
+        const isRunning = ['running', 'cancelling'].includes(task?.status) && index === rows.length - 1;
+        const status = isRunning ? 'running' : event.status || (event.ok === true ? 'success' : event.ok === false ? 'failed' : 'pending');
         return <div className={`timeline-row ${status}`} key={`${event.tool}-${index}`}>
           <span className="timeline-icon">{statusIcon(status)}</span>
           <div><strong>{event.tool}</strong><small>{event.target || 'Инструмент агента'}</small></div>
-          <span className="row-status">{status === 'success' ? 'Успешно' : status === 'running' ? 'Выполняется' : 'Ожидание'}</span>
+          <span className="row-status">{status === 'success' ? 'Успешно' : status === 'running' ? 'Выполняется' : status === 'failed' ? 'Ошибка' : status === 'cancelled' ? 'Отменено' : 'Ожидание'}</span>
         </div>;
       })}
     </div>

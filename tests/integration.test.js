@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -193,4 +194,44 @@ test('Studio streams events and cancels an active agent task', async t => {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'No confirmation' }),
   });
   assert.equal(rejectedCommit.status, 400);
+});
+
+test('coding agent aborts an in-flight model request at the run deadline', async t => {
+  const port = await freePort();
+  const api = http.createServer((req, res) => {
+    if (req.url === '/v1/models') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: [{ id: 'deepseek-chat' }] }));
+      return;
+    }
+    if (req.url === '/v1/sessions') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ agents: [] }));
+      return;
+    }
+    if (req.url?.startsWith('/reset-session')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+      return;
+    }
+    if (req.url === '/v1/chat/completions') return;
+    res.writeHead(404).end();
+  });
+  await new Promise((resolve, reject) => api.listen(port, '127.0.0.1', resolve).once('error', reject));
+  t.after(() => new Promise(resolve => api.close(resolve)));
+  const started = Date.now();
+  const child = spawn(process.execPath, [
+    'agent.js', '--url', `http://127.0.0.1:${port}`, '--mode', 'read-only',
+    '--max-duration-ms', '1000', '--max-steps', '2', '--no-history', 'wait forever',
+  ], { cwd: ROOT, windowsHide: true, env: { ...process.env, FREEDEEPSEEK_API_KEY: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let output = '';
+  child.stdout.on('data', chunk => { output += chunk; });
+  child.stderr.on('data', chunk => { output += chunk; });
+  const exitCode = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`Agent ignored deadline:\n${output}`)); }, 6000);
+    child.once('exit', code => { clearTimeout(timer); resolve(code); });
+  });
+  assert.equal(exitCode, 1);
+  assert.ok(Date.now() - started < 5000);
+  assert.match(output, /API недоступен|aborted|timeout/i);
 });

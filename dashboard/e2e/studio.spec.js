@@ -96,6 +96,8 @@ test('model, permission and project controls update visible state', async ({ pag
   await mockStudioApi(page);
   await page.goto('/');
   await expect(page).toHaveTitle('DeepSeek Agent Studio');
+  await expect(page.getByText('Задача ещё не запущена')).toBeVisible();
+  await expect(page.getByText('get_project_map')).toHaveCount(0);
   if (testInfo.project.name === 'mobile') await expect(page.getByRole('button', { name: /Рабочая папка/ })).toBeVisible();
   else await expect(page.getByText('DeepSeek Agent Studio')).toBeVisible();
 
@@ -122,6 +124,7 @@ test('task can be started, cancelled and conversation context reset', async ({ p
   await expect(page.getByRole('button', { name: 'Остановить' })).toBeVisible();
   await page.getByRole('button', { name: 'Остановить' }).click();
   await expect(page.getByRole('button', { name: /Запустить/ })).toBeVisible();
+  await expect(page.getByText('Отменено')).toBeVisible();
   expect(state.task.status).toBe('cancelled');
 
   page.once('dialog', dialog => dialog.accept());

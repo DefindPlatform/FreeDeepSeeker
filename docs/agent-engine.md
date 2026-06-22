@@ -37,7 +37,7 @@ States are `initialized -> running -> completed|failed|cancelled`; terminal tran
 
 Errors from runtime policy use stable codes (`RUN_CANCELLED`, `INVALID_STATE`, `DURATION_LIMIT`, `STEP_LIMIT`, `TOOL_CALL_LIMIT`, `REPEATED_TOOL_LOOP`) and may include a user-facing recovery hint. Reports contain duration, usage, failed and denied calls, and counts by permission kind. They contain bounded targets rather than tool payloads.
 
-Cancellation is checked at each model step and tool call. Commands have their own timeout and process-tree termination. Failed or cancelled mutations roll back when `rollbackOnFailure` is enabled.
+Cancellation is checked at each model step and tool call. The wall-clock deadline is also attached to in-flight proxy requests, so a stalled model call cannot outlive the configured run budget. Commands have their own timeout and process-tree termination. Failed or cancelled mutations roll back when `rollbackOnFailure` is enabled.
 
 ## Tool registry contract
 

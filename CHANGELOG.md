@@ -4,6 +4,9 @@ All notable changes are documented here. Versions follow Semantic Versioning.
 
 ## Unreleased
 
+- Fixed npm packaging so ignored local planning/report files cannot leak through wildcard allowlists.
+- Fixed Agent Studio fallback timeline rows to report truthful idle, running, completed, failed and cancelled states.
+- Enforced coding-agent wall-clock deadlines on in-flight proxy requests.
 - Added dependency-aware persistent task plans, validated tool arguments, runtime wall-clock budgets, stable runtime errors, and richer run metrics.
 - Hardened durable project memory with explicit corruption detection, size limits, statistics, and optimistic revisions.
 

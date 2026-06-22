@@ -435,7 +435,9 @@ test('agent runtime enforces cancellation and wall-clock budgets with metrics', 
   runtime.beginStep();
   runtime.acceptToolCall('read_file', { path: 'a.js' });
   runtime.recordToolResult('read_file', { path: 'a.js' }, { ok: false, denied: true }, 'read');
+  assert.equal(runtime.remainingTimeMs(), 1000);
   now = 2000;
+  assert.equal(runtime.remainingTimeMs(), 0);
   assert.throws(() => runtime.beginStep(), error => error.code === 'DURATION_LIMIT' && /разбейте задачу/i.test(error.recovery));
   runtime.finish('failed', 'duration');
   assert.deepEqual(runtime.toJSON().metrics, {
@@ -445,6 +447,14 @@ test('agent runtime enforces cancellation and wall-clock budgets with metrics', 
   const cancelled = new AgentRunController();
   cancelled.start();
   assert.throws(() => cancelled.beginStep({ aborted: true }), error => error.code === 'RUN_CANCELLED');
+});
+
+test('agent runtime produces an abort signal for in-flight API deadlines', async () => {
+  const runtime = new AgentRunController({ maxDurationMs: 1000 });
+  runtime.start();
+  const signal = runtime.createDeadlineSignal();
+  assert.equal(signal.aborted, false);
+  assert.ok(runtime.remainingTimeMs() <= 1000);
 });
 
 test('task plan validates dependencies, transitions and optimistic revisions', () => {

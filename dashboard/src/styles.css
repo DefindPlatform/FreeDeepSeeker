@@ -143,6 +143,8 @@ main { min-width: 0; display: grid; grid-template-rows: auto minmax(230px, 1fr) 
 .timeline-icon { height: 100%; display: grid; place-items: center; border-right: 1px solid var(--border); color: var(--muted); }
 .success .timeline-icon, .success .row-status { color: var(--green); }
 .running .timeline-icon, .running .row-status { color: var(--blue); }
+.failed .timeline-icon, .failed .row-status { color: var(--red); }
+.cancelled .timeline-icon, .cancelled .row-status { color: var(--amber); }
 .timeline-row strong { font: 12px var(--mono); }
 .timeline-row small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
 .row-status { padding-right: 17px; color: var(--amber); font-size: 10px; }
