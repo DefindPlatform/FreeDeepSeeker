@@ -7,7 +7,9 @@ const { spawnSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const serverInternals = require('../server.js').__test;
-const clientInternals = require('../client.js').__test;
+const clientModule = require('../client.js');
+const clientInternals = clientModule.__test;
+const clientApi = clientModule.api;
 const agentInternals = require('../agent.js').__test;
 const agentCore = require('../lib/agent-core.js');
 const { ToolRegistry, createCodingToolRegistry } = require('../lib/tool-registry.js');
@@ -19,10 +21,13 @@ const studio = require('../studio-server.js');
 const { loadServerConfig } = require('../lib/server-config.js');
 const { createSessionStore } = require('../lib/session-store.js');
 const { createHttpGuard } = require('../lib/http-guard.js');
+const apiRoutes = require('../lib/api-routes.js');
 const { createLogger, redact, attachRequestLog } = require('../lib/logger.js');
 const { EventEmitter } = require('node:events');
 const gitService = require('../lib/git-service.js');
 const projectRegistry = require('../lib/project-registry.js');
+const doctor = require('../scripts/doctor.js');
+const chromeAuthScript = path.join(ROOT, 'scripts/deepseek_chrome_auth.js');
 
 function tmpdir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'fdsapi-test-'));
@@ -34,6 +39,24 @@ function runNode(args, opts = {}) {
     encoding: 'utf8',
     env: { ...process.env, ...opts.env },
   });
+}
+
+function mockJsonResponse() {
+  return {
+    status: 0,
+    headers: null,
+    body: '',
+    writeHead(status, headers) {
+      this.status = status;
+      this.headers = headers;
+    },
+    end(body) {
+      this.body = body;
+    },
+    json() {
+      return JSON.parse(this.body);
+    },
+  };
 }
 
 test('server configuration validates ports, limits and exact CORS origins', () => {
@@ -128,6 +151,63 @@ test('session store bounds history and resets one or all sessions', () => {
   assert.equal(store.get('agent-a').history.length, 2);
   assert.equal(store.reset('all').count, 1);
   assert.equal(store.sessions.size, 0);
+});
+
+test('API route helpers return health and control responses', () => {
+  const store = createSessionStore();
+  store.store('agent-a', 'hello', 'world');
+  const context = {
+    watermark: 'test-watermark',
+    modelConfigs: {
+      'deepseek-chat': { supported: true, real_model: 'web-chat', capabilities: { files: true } },
+      'deepseek-vision': { supported: false, real_model: 'vision', capabilities: { vision: true } },
+    },
+    supportedModelIds: ['deepseek-chat'],
+    allModelCapabilities: { 'deepseek-chat': { supported: true } },
+    sessions: store.sessions,
+    accounts: [{ id: 'a1' }],
+    accountStatus: account => ({ id: account.id, ready: true }),
+    hasAuthConfig: () => true,
+    sessionTtlMs: 120000,
+    maxMessageDepth: 10,
+    sessionStore: store,
+  };
+
+  const health = mockJsonResponse();
+  assert.equal(apiRoutes.handleHealthRoute({ method: 'GET' }, health, new URL('http://local/health'), context), true);
+  assert.equal(health.status, 200);
+  assert.equal(health.headers['Content-Type'], 'application/json');
+  assert.deepEqual(health.json().unsupported_models, ['deepseek-vision']);
+  assert.equal(health.json().session_reuse.ttl_minutes, 2);
+
+  const models = mockJsonResponse();
+  assert.equal(apiRoutes.handleControlRoutes({ method: 'GET' }, models, new URL('http://local/v1/models'), context), true);
+  assert.equal(models.json().data[0].real_model, 'web-chat');
+
+  const capabilities = mockJsonResponse();
+  assert.equal(apiRoutes.handleControlRoutes({ method: 'GET' }, capabilities, new URL('http://local/api/model-capabilities'), context), true);
+  assert.equal(capabilities.json().data['deepseek-chat'].supported, true);
+
+  const sessions = mockJsonResponse();
+  assert.equal(apiRoutes.handleControlRoutes({ method: 'GET' }, sessions, new URL('http://local/v1/sessions'), context), true);
+  assert.equal(sessions.json().total, 1);
+
+  const missing = mockJsonResponse();
+  assert.equal(apiRoutes.handleControlRoutes({ method: 'POST' }, missing, new URL('http://local/reset-session?agent=missing'), context), true);
+  assert.equal(missing.status, 404);
+
+  const reset = mockJsonResponse();
+  assert.equal(apiRoutes.handleControlRoutes({ method: 'POST' }, reset, new URL('http://local/reset-session?agent=agent-a&clear_history=true'), context), true);
+  assert.equal(reset.json().status, 'session_reset');
+  assert.equal(reset.json().history_preserved, 0);
+
+  store.store('agent-b', 'hello', 'again');
+  const resetAll = mockJsonResponse();
+  assert.equal(apiRoutes.handleControlRoutes({ method: 'POST' }, resetAll, new URL('http://local/reset-session?agent=all'), context), true);
+  assert.equal(resetAll.json().status, 'all_sessions_cleared');
+
+  assert.equal(apiRoutes.handleHealthRoute({ method: 'POST' }, mockJsonResponse(), new URL('http://local/health'), context), false);
+  assert.equal(apiRoutes.handleControlRoutes({ method: 'GET' }, mockJsonResponse(), new URL('http://local/missing'), context), false);
 });
 
 test('HTTP guard performs constant-time API auth and per-address limits', () => {
@@ -233,6 +313,38 @@ test('doctor exits cleanly when offline auth checks pass', () => {
   assert.match(res.stdout, /auth file looks OK/i);
 });
 
+test('doctor helpers discover auth files and report invalid JSON', () => {
+  const originalAuthDir = process.env.DEEPSEEK_AUTH_DIR;
+  const originalAuthPath = process.env.DEEPSEEK_AUTH_PATH;
+  const dir = tmpdir();
+  try {
+    fs.writeFileSync(path.join(dir, 'b.json'), '{}');
+    fs.writeFileSync(path.join(dir, 'a.json'), '{}');
+    fs.writeFileSync(path.join(dir, 'ignored.txt'), '{}');
+    process.env.DEEPSEEK_AUTH_DIR = dir;
+    delete process.env.DEEPSEEK_AUTH_PATH;
+    assert.deepEqual(doctor.authPaths().map(file => path.basename(file)), ['a.json', 'b.json']);
+
+    process.env.DEEPSEEK_AUTH_DIR = path.join(dir, 'missing');
+    assert.deepEqual(doctor.authPaths(), [path.join(dir, 'missing', '(directory unavailable)')]);
+
+    delete process.env.DEEPSEEK_AUTH_DIR;
+    process.env.DEEPSEEK_AUTH_PATH = `${path.join(dir, 'one.json')}, ${path.join(dir, 'two.json')}`;
+    assert.deepEqual(doctor.authPaths(), [path.join(dir, 'one.json'), path.join(dir, 'two.json')]);
+
+    const broken = path.join(dir, 'broken.json');
+    fs.writeFileSync(broken, '{broken');
+    const result = doctor.checkAuthFile(broken);
+    assert.equal(result.ok, false);
+    assert.match(result.issues[0], /invalid JSON/);
+  } finally {
+    if (originalAuthDir === undefined) delete process.env.DEEPSEEK_AUTH_DIR;
+    else process.env.DEEPSEEK_AUTH_DIR = originalAuthDir;
+    if (originalAuthPath === undefined) delete process.env.DEEPSEEK_AUTH_PATH;
+    else process.env.DEEPSEEK_AUTH_PATH = originalAuthPath;
+  }
+});
+
 test('chrome auth prints actionable OS instructions when Chrome is missing', () => {
   const dir = tmpdir();
   const fakeChrome = path.join(dir, 'missing-chrome');
@@ -243,6 +355,36 @@ test('chrome auth prints actionable OS instructions when Chrome is missing', () 
   assert.match(out, /macOS/i);
   assert.match(out, /Linux/i);
   assert.match(out, /CHROME_PATH/i);
+});
+
+test('chrome auth helper can be imported without launching Chrome and validates pure helpers', () => {
+  const res = runNode(['-e', `
+    const fs = require('node:fs');
+    const os = require('node:os');
+    const path = require('node:path');
+    const helper = require(${JSON.stringify(chromeAuthScript)});
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deepseek-profile-test-'));
+    fs.writeFileSync(path.join(dir, 'marker.txt'), 'x');
+    const parsed = helper.normalizeToken(JSON.stringify({ accessToken: 'tok_123' }));
+    const raw = helper.normalizeToken(' raw-token ');
+    const help = helper.chromeInstallHelp('missing-browser');
+    helper.removeProfileSafely(dir);
+    let unsafe = false;
+    try { helper.removeProfileSafely(os.homedir()); } catch { unsafe = true; }
+    console.log(JSON.stringify({
+      parsed, raw, hasHelp: /Windows[\\s\\S]*macOS[\\s\\S]*Linux/.test(help),
+      removed: !fs.existsSync(dir), unsafe
+    }));
+  `], { env: { CHROME_PATH: path.join(tmpdir(), 'missing-chrome') } });
+  assert.equal(res.status, 0, res.stderr || res.stdout);
+  const result = JSON.parse(res.stdout.trim());
+  assert.deepEqual(result, {
+    parsed: 'tok_123',
+    raw: 'raw-token',
+    hasHelp: true,
+    removed: true,
+    unsafe: true,
+  });
 });
 
 test('DeepSeek stream parser treats SEARCH fragments as assistant output', () => {
@@ -276,6 +418,81 @@ test('DeepSeek stream parser does not treat service content chunks as model erro
   assert.equal(serverInternals.isDeepSeekModelErrorEvent({ content: 'Official Reuters website URL' }), false);
   assert.equal(serverInternals.isDeepSeekModelErrorEvent({ finish_reason: 'stop' }), false);
   assert.equal(serverInternals.isDeepSeekModelErrorEvent({ type: 'error', content: 'backend error' }), true);
+});
+
+test('server helper functions normalize tool calls, content and compatibility payloads', () => {
+  assert.equal(serverInternals.parseRetryAfterMs('2'), 2000);
+  assert.equal(serverInternals.parseRetryAfterMs('not-a-date'), null);
+  assert.equal(serverInternals.extractBalancedJsonAt('x {"a":{"b":"}"},"c":1} tail', 2), '{"a":{"b":"}"},"c":1}');
+  assert.deepEqual(serverInternals.coerceToolCallObject({ function: { name: 'run', arguments: '{"ok":true}' } }), {
+    name: 'run',
+    arguments: '{"ok":true}',
+  });
+  assert.deepEqual(serverInternals.parseToolCall('```json\n{"tool_call":{"name":"read_file","arguments":{"path":"README.md"}}}\n```'), {
+    name: 'read_file',
+    arguments: '{"path":"README.md"}',
+  });
+  assert.deepEqual(serverInternals.parseToolCall('TOOL_CALL: list_files\narguments: {"path":"."}'), {
+    name: 'list_files',
+    arguments: '{"path":"."}',
+  });
+  assert.equal(serverInternals.parseToolCall('no tools here'), null);
+  assert.match(serverInternals.formatToolDefinitions([{ type: 'function', function: { name: 'read_file', description: 'Read', parameters: { type: 'object' } } }]), /read_file/);
+  assert.equal(serverInternals.formatToolDefinitions([]), '');
+  assert.equal(serverInternals.sanitizeContent('a\ud800b'), 'ab');
+  assert.deepEqual(serverInternals.buildUsage('12345', 'abcd', 'abcdefgh').completion_tokens_details, { reasoning_tokens: 2 });
+
+  const textResponse = serverInternals.buildTextResponse('answer', 'prompt', 'deepseek-chat', 'think');
+  assert.equal(textResponse.choices[0].message.reasoning_content, 'think');
+  const toolResponse = serverInternals.buildToolCallResponse({ name: 'read_file', arguments: '{"path":"a"}' }, 'deepseek-chat', 'prompt', 'think');
+  assert.equal(toolResponse.choices[0].finish_reason, 'tool_calls');
+  assert.equal(toolResponse.choices[0].message.content, null);
+
+  assert.equal(serverInternals.normalizeMessageContent([
+    { type: 'text', text: 'hello' },
+    { type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'text', text: 'done' }] },
+    { type: 'image_url', image_url: { url: 'file.png' } },
+  ]), 'hello\n[Tool Result toolu_1]\ndone\n[Image: file.png]');
+
+  assert.deepEqual(serverInternals.normalizeAnthropicTools([{ name: 'lookup', input_schema: { type: 'object' } }])[0].function.name, 'lookup');
+  assert.deepEqual(serverInternals.normalizeResponsesTools([{ type: 'function', name: 'lookup', parameters: { type: 'object' } }])[0].function.name, 'lookup');
+  assert.deepEqual(serverInternals.normalizeResponsesInput([
+    { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+    { type: 'function_call_output', call_id: 'call_1', output: 'ok' },
+  ]), [
+    { role: 'user', content: 'hi' },
+    { role: 'tool', tool_call_id: 'call_1', content: 'ok' },
+  ]);
+
+  const anthropic = serverInternals.normalizeApiParams({
+    system: 'sys',
+    metadata: { user_id: 'user-1' },
+    messages: [
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'lookup', input: { q: 'x' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }] },
+    ],
+    tools: [{ name: 'lookup', input_schema: { type: 'object' } }],
+  }, 'anthropic');
+  assert.equal(anthropic.model, 'deepseek-chat');
+  assert.equal(anthropic.user, 'user-1');
+  assert.equal(anthropic.messages[1].tool_calls[0].function.name, 'lookup');
+  assert.equal(anthropic.messages[2].role, 'tool');
+
+  const responses = serverInternals.normalizeApiParams({
+    instructions: 'sys',
+    input: 'hello',
+    tools: [{ type: 'function', name: 'lookup' }],
+    stream: true,
+  }, 'responses');
+  assert.deepEqual(responses.messages.slice(0, 2), [{ role: 'system', content: 'sys' }, { role: 'user', content: 'hello' }]);
+  assert.equal(responses.stream, true);
+  assert.deepEqual(serverInternals.safeJsonParseObject('[]', { fallback: true }), { fallback: true });
+
+  const anthropicToolResponse = serverInternals.toAnthropicResponse(toolResponse);
+  assert.equal(anthropicToolResponse.content[0].type, 'tool_use');
+  const anthropicTextResponse = serverInternals.toAnthropicResponse(textResponse);
+  assert.equal(anthropicTextResponse.content[0].text, 'answer');
+  assert.equal(anthropicTextResponse.reasoning_content, 'think');
 });
 
 test('CLI parses model, system prompt, URL and non-stream mode', () => {
@@ -319,6 +536,63 @@ test('CLI rejects missing option values and accepts a prompt starting with dashe
   assert.equal(args.prompt, '--explain-this');
 });
 
+test('CLI API wrapper injects API keys and normalizes fetch errors', async () => {
+  const originalFetch = global.fetch;
+  const originalKey = process.env.FREEDEEPSEEK_API_KEY;
+  const calls = [];
+  try {
+    process.env.FREEDEEPSEEK_API_KEY = 'test-key';
+    global.fetch = async (url, options = {}) => {
+      calls.push({ url, options });
+      return {
+        ok: true,
+        async json() {
+          return { data: [{ id: 'z-model' }, { id: 'deepseek-chat' }] };
+        },
+      };
+    };
+    const models = await clientApi.connectModels({ url: 'http://api.test', autoStart: false });
+    assert.deepEqual(models.map(model => model.id), ['deepseek-chat', 'z-model']);
+    assert.equal(calls[0].options.headers.Authorization, 'Bearer test-key');
+
+    global.fetch = async () => ({
+      ok: false,
+      status: 400,
+      async text() {
+        return JSON.stringify({ error: { message: 'bad request' } });
+      },
+    });
+    await assert.rejects(() => clientApi.request('http://api.test/fail'), /bad request \(HTTP 400\)/);
+
+    global.fetch = async () => { throw new Error('socket closed'); };
+    await assert.rejects(() => clientApi.request('http://api.test/down'), error => {
+      assert.equal(error.code, 'API_UNREACHABLE');
+      assert.match(error.message, /socket closed/);
+      return true;
+    });
+  } finally {
+    global.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.FREEDEEPSEEK_API_KEY;
+    else process.env.FREEDEEPSEEK_API_KEY = originalKey;
+  }
+});
+
+test('CLI streaming reader returns reasoning and content from SSE chunks', async () => {
+  const encoder = new TextEncoder();
+  const response = {
+    body: [
+      encoder.encode('data: {"choices":[{"delta":{"reasoning_content":"think"}}]}\n\n'),
+      encoder.encode('data: {"choices":[{"delta":{"content":"answer"}}]}\n'),
+      encoder.encode('data: [DONE]\n'),
+    ],
+  };
+  let printed = '';
+  const result = await clientInternals.readStreamingResponse(response, { write: chunk => { printed += chunk; } });
+  assert.deepEqual(result, { content: 'answer', reasoning: 'think' });
+  assert.match(printed, /think/);
+  assert.match(printed, /answer/);
+});
+
 test('coding agent confines paths to its workspace', () => {
   const root = tmpdir();
   const nested = path.join(root, 'src');
@@ -345,6 +619,26 @@ test('coding agent parses runtime budgets, dry-run and report output', () => {
   assert.equal(args.maxToolCalls, 17);
   assert.equal(args.report, path.join(ROOT, 'run.json'));
   assert.throws(() => agentInternals.parseArgs(['--max-tool-calls', '0']), /от 1 до 1000/);
+});
+
+test('coding agent helper functions format capabilities and inspect files safely', () => {
+  const root = tmpdir();
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.mkdirSync(path.join(root, 'node_modules'));
+  fs.writeFileSync(path.join(root, 'src', 'app.js'), 'console.log("ok");');
+  fs.writeFileSync(path.join(root, 'node_modules', 'ignored.js'), 'ignored');
+  fs.writeFileSync(path.join(root, 'binary.bin'), Buffer.from([0, 1, 2]));
+  fs.writeFileSync(path.join(root, 'large.txt'), '12345');
+
+  assert.equal(agentInternals.relativePath(root, root), '.');
+  assert.equal(agentInternals.relativePath(root, path.join(root, 'src', 'app.js')), path.join('src', 'app.js'));
+  assert.equal(agentInternals.capabilityBadges({ capabilities: { reasoning: true, web_search: true, files: true } }), 'reasoning, search, files');
+  assert.equal(agentInternals.capabilityBadges({ capabilities: {} }), 'chat');
+  assert.deepEqual(agentInternals.walk(root, root, 3, 20), ['binary.bin', 'large.txt', 'src/', path.join('src', 'app.js')]);
+  assert.equal(agentInternals.readTextFile(path.join(root, 'src', 'app.js')), 'console.log("ok");');
+  assert.throws(() => agentInternals.readTextFile(root), /не файл/i);
+  assert.throws(() => agentInternals.readTextFile(path.join(root, 'binary.bin')), /Бинарный файл/i);
+  assert.throws(() => agentInternals.readTextFile(path.join(root, 'large.txt'), 4), /слишком большой/i);
 });
 
 test('tool registry exposes provider schemas and permission kinds', () => {
@@ -515,6 +809,40 @@ test('coding agent dry-run validates but does not mutate files or launch command
   assert.equal(write.dry_run, true);
   assert.equal(command.dry_run, true);
   assert.equal(fs.existsSync(target), false);
+});
+
+test('coding agent file tools cover list, read, search, replace and delete dry-run paths', async () => {
+  const root = tmpdir();
+  const config = agentCore.loadProjectConfig(root);
+  config.permissionMode = 'full';
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src', 'app.js'), 'alpha\nbeta\nalpha\n');
+  const context = { root, config, transaction: { before() {}, after() {}, audit() {} }, dryRun: true };
+
+  const listed = await agentInternals.executeTool('list_files', { path: '.', depth: 2 }, context);
+  assert.equal(listed.path, '.');
+  assert.ok(listed.entries.includes('src/'));
+  assert.ok(listed.entries.includes(path.join('src', 'app.js')));
+
+  const read = await agentInternals.executeTool('read_file', { path: 'src/app.js', start_line: 2, end_line: 2 }, context);
+  assert.equal(read.content, '2: beta');
+
+  const found = await agentInternals.executeTool('search_files', { path: 'src', query: 'ALPHA' }, context);
+  assert.equal(found.matches.length, 2);
+  const foundCaseSensitive = await agentInternals.executeTool('search_files', { path: 'src', query: 'ALPHA', case_sensitive: true }, context);
+  assert.deepEqual(foundCaseSensitive.matches, []);
+  await assert.rejects(() => agentInternals.executeTool('search_files', { path: 'src', query: '' }, context), /Пустая строка поиска/);
+
+  await assert.rejects(() => agentInternals.executeTool('replace_in_file', { path: 'src/app.js', old_text: '', new_text: 'x' }, context), /old_text/);
+  await assert.rejects(() => agentInternals.executeTool('replace_in_file', { path: 'src/app.js', old_text: 'missing', new_text: 'x' }, context), /не найден/);
+  await assert.rejects(() => agentInternals.executeTool('replace_in_file', { path: 'src/app.js', old_text: 'alpha', new_text: 'gamma' }, context), /найден 2 раз/);
+  const replace = await agentInternals.executeTool('replace_in_file', { path: 'src/app.js', old_text: 'alpha', new_text: 'gamma', replace_all: true }, context);
+  assert.deepEqual({ dry_run: replace.dry_run, action: replace.action, replacements: replace.replacements }, { dry_run: true, action: 'replace', replacements: 2 });
+
+  await assert.rejects(() => agentInternals.executeTool('delete_path', { path: 'missing.txt' }, context), /Путь не существует/);
+  await assert.rejects(() => agentInternals.executeTool('delete_path', { path: 'src' }, context), /recursive=true/);
+  const deleted = await agentInternals.executeTool('delete_path', { path: 'src', recursive: true }, context);
+  assert.deepEqual({ dry_run: deleted.dry_run, action: deleted.action, recursive: deleted.recursive }, { dry_run: true, action: 'delete', recursive: true });
 });
 
 test('coding agent parses project-map output flags', () => {

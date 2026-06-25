@@ -74,12 +74,13 @@ npm run auth:import -- --input ./deepseek-auth.json
 
 ## Структура файлов
 
+- Подробная карта проекта: [`docs/project-structure.md`](docs/project-structure.md)
 - `deepseek-auth.json` — приватный auth-файл, не добавляется в VCS
 - `.chrome-for-testing-profile-deepseek/` — профиль браузера для авторизации
 - `.deepseek-agent/` — состояние coding agent
 - `dashboard/` — локальная Studio UI
 - `scripts/` — утилиты и helper-скрипты
-- `docs/` — дополнительная документация
+- `docs/` — дополнительная документация и [`docs/README.md`](docs/README.md)
 
 ## Запуск сервера
 
@@ -270,8 +271,10 @@ Proxy поддерживает reasoning и web search для моделей, к
 
 ## Документация
 
-Дополнительная документация находится в папке `docs/`:
+Дополнительная документация находится в папке `docs/`. Начните с [`docs/README.md`](docs/README.md):
 
+- `docs/README.md`
+- `docs/project-structure.md`
 - `docs/api-documentation.md`
 - `docs/architecture.md`
 - `docs/coding-agent.md`

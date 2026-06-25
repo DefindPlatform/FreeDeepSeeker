@@ -462,6 +462,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  __test: { parseArgs, capabilityBadges, sortModels, extractResponse, makeMessages, isLocalApi },
+  __test: { parseArgs, capabilityBadges, sortModels, extractResponse, makeMessages, isLocalApi, readStreamingResponse },
   api: { request, connectModels },
 };

@@ -706,4 +706,18 @@ if (require.main === module) {
   });
 }
 
-module.exports = { __test: { parseArgs, isInside, isHomeWorkspace, selectModel, resolveWorkspacePath, readTextFile, walk, executeTool, resetAgentContext } };
+module.exports = {
+  __test: {
+    parseArgs,
+    isInside,
+    isHomeWorkspace,
+    capabilityBadges,
+    relativePath,
+    selectModel,
+    resolveWorkspacePath,
+    readTextFile,
+    walk,
+    executeTool,
+    resetAgentContext,
+  },
+};

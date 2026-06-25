@@ -503,7 +503,17 @@ async function main() {
     cdp.close();
     if (!persisted.token || !persisted.cookie) process.exitCode = 2;
 }
-main().catch((e) => {
-    console.error('[auth] ERROR:', e);
-    process.exitCode = 1;
-});
+if (require.main === module) {
+    main().catch((e) => {
+        console.error('[auth] ERROR:', e);
+        process.exitCode = 1;
+    });
+}
+
+module.exports = {
+    shellPatternSafe,
+    removeProfileSafely,
+    parseMaybeJson,
+    normalizeToken,
+    chromeInstallHelp,
+};
